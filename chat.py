@@ -1,8 +1,10 @@
 import os
 import json
-import openai
 import re
+import openai
 import tiktoken
+
+
 
  ######   #######  ##    ##  ######  ########    ###    ##    ## ########  ######
 ##    ## ##     ## ###   ## ##    ##    ##      ## ##   ###   ##    ##    ##    ##
@@ -15,18 +17,19 @@ import tiktoken
 DEBUG = False
 LOAD = False
 MAX_TOKENS = 4000
-SUMMARIZE = False
+DIALOGUE_TRIES = 3
+
+SUMMARIZE = True
+SUMMARIZED = False
 SUMMARIZE_LEN = 2000
 
-# Run in command line:
-# setx OPENAI_API_KEY "your key"
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 # Describes the world the story is set in plus more specific details of the room the character is in. Used for AI description and included at the beginning of every chat for context
 setting = "It's a slow afternoon at the pet store."
 
 # Describe the character from the character's perspective (The character is 'you')
-red_character = "You are Red, an old, grumpy, widowed man. You're here to buy food for your late wife's cat that you're taking care of. You will never adopt a dog. You would be shocked to learn a dog can talk."
+red_character = "You are Red, an old, grumpy, widowed man. You're here to buy food for your late wife's cat that you're taking care of. You will never adopt a dog. You would be shocked to learn a dog could speak."
 # that only speaks in haiku's. You get embarrassed if your haiku has the wrong number of syllables
 
 # Describe what the character should know about the blue (the player). From the characters perspective (Blue is 'he/she/they')
@@ -35,7 +38,7 @@ blue_character = "They are Blue, a cute little dog sitting in the middle of thei
 # How the character knows the player? What caused this conversation to start? Does Red have a goal related to the player?
 red_to_blue = "You walk down the aisle of the pet store, towards the back you notice a sign that reads 'ADOPTIONS'. You see a little dog."
 
-# Use this to "describe the scene"
+# Use this to ask the AI to describe the scene
 blue_perspective = "You sit in the middle of your square, gray kennel. There is an enclosure with towels in the back for you to sleep in private."
 
 response_directive = "Give the response like this:\n(<adjective describing Red's tone>) <what Red said>"
@@ -47,6 +50,8 @@ system_backup = {"role": "system", "content": f"{setting} {red_character} {red_t
 messages = [
     system_directive
 ]
+
+SUMMARY_STRING = ''
 
 # LOAD = True
 filename = 'alien.json'
@@ -89,7 +94,8 @@ def messages_string(messages_to_summarize):
     for m in messages_to_summarize:
         s = m['content']
         if m['role'] == 'system':
-            string += f' System: {s}'
+            # string += f' System: {s}'
+            string += f' {s}'
         if m['role'] == 'user':
             string += f' Blue: {s}'
         if m['role'] == 'assistant':
@@ -124,9 +130,9 @@ def get_summary(request):
 def get_dialogue(user_input):
     messages.append( {"role": "user", "content": user_input} )
 
-    MAX = 5
-    for n in range(MAX):
-        if n == MAX-1:
+    DIALOGUE_TRIES = 5
+    for n in range(DIALOGUE_TRIES):
+        if n == DIALOGUE_TRIES-1:
             messages[0] = system_backup
             print("<Parenthesis failed! Moving to backup>")
         response = openai.ChatCompletion.create(
@@ -167,17 +173,25 @@ def get_dialogue(user_input):
     print(f'({len(messages)-1}) Red: {answer}')
     return answer
 
-def summarize(n=5000):
+def summarize(n=5000, summary='', delete=False):
     """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""
     i = 1
     if num_tokens_from_messages(messages) > n:
         while num_tokens_from_messages(messages[:i]) < n:
             i += 1
         string = messages_string(messages[1:i])
+        if delete:
+            del messages[1:i]
     else:
-        string = messages_string(messages)
-        
-    print(f'<Summary: {get_summary(string)}>')
+        string = messages_string(messages[1:])
+        if delete:
+            del messages[1:]
+
+    string.strip()
+    if DEBUG:
+        print(f'<Summarizing: {string}>')
+
+    return get_summary(string)
 
 encoding = tiktoken.encoding_for_model("gpt-3.5-turbo-0301")
 def num_tokens_from_messages(messages):
@@ -205,8 +219,7 @@ def num_tokens_from_messages(messages):
 ##     ## ##     ##  ##  ##   ###
 ##     ## ##     ## #### ##    ##
 
-# Chat GPT
-encoding = tiktoken.get_encoding("cl100k_base")
+# encoding = tiktoken.get_encoding("cl100k_base")
 encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
 print("You wake up in your kennel at the back of the pet store.")
@@ -219,7 +232,7 @@ while True:
     user_input = input(f'({len(messages)}) Blue: ')
 
     if user_input == '!summary':
-        summarize()
+        print(f'<Summary: {summarize()}>')
         continue
 
     if user_input == '!print':
@@ -236,16 +249,30 @@ while True:
         json.dump(messages, open(file, 'w'), indent='\t')
         continue
 
+    if user_input == '!load':
+        file = input('Filename: ')
+        messages = json.load(open(file))
+        continue
+
     if user_input == '!debug':
         DEBUG = not DEBUG
+        print(f'{DEBUG=}')
         continue
 
     while not get_dialogue(user_input):
         user_input = input(f'({len(messages)}) Blue: ')
 
     if SUMMARIZE:
-        # TODO: Run summarize when almost out of memory
-        pass
+        if num_tokens_from_messages(messages) > MAX_TOKENS:
+            SUMMARY_STRING = summarize(SUMMARIZE_LEN, SUMMARY_STRING, True)
+            if DEBUG: print(f'<Summary: {SUMMARY_STRING}>')
+
+            if SUMMARIZED == False: # Not already summarized?
+                messages.insert(1, {"role": "system", "content": SUMMARY_STRING})
+                SUMMARIZED = True
+            else: # Replace old summary
+                messages[1] = {"role": "system", "content": SUMMARY_STRING}
+
     else: # If SUMMARIZE = False, just forget oldest messages
         while num_tokens_from_messages(messages) > MAX_TOKENS:
             last = messages[1]['content']

@@ -1,6 +1,6 @@
 # BlueChat
 
-A conversational engine to experiment with GPT-3.5-Turbo. Contains the setup for a basic conversation between two characters. Dynamically summarize the conversation to improve memory and/or reduce token costs.
+A conversational engine to experiment with OpenAI GPT Chat API. Contains the setup for a basic conversation between two characters. Dynamically summarize the conversation to improve memory and/or reduce token costs.
 
 ---
 
@@ -31,7 +31,7 @@ A conversational engine to experiment with GPT-3.5-Turbo. Contains the setup for
     <details>
     <summary>(Click to expand)</summary>
 
-    Example:
+    Example (GPT 3.5 Turbo):
 
     ```
     You wake up in your kennel at the back of the pet store.
@@ -169,11 +169,13 @@ Costs increase linearly on the length of the conversation. Previous messages are
 
     - [ ] Tests for correctness and improvement in memory
 
+- [x] GPT-4
+
+    - [ ] Comparisons with other versions
+
 - [ ] Conversation end conditions
 
 - [ ] Group conversations
-
-- [ ] GPT-4
 
 ---
 

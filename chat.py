@@ -24,6 +24,9 @@ SUMMARIZE = True
 SUMMARIZED = False
 SUMMARIZE_LEN = 1000
 
+# MODEL = "gpt-3.5-turbo" # Cheaper
+MODEL = "gpt-4" # Better
+
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 # Describes the world the story is set in plus more specific details of the room the character is in. Used for AI description and included at the beginning of every chat for context
@@ -73,19 +76,12 @@ if LOAD:
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
 def get_response(request):
-#     if DEBUG:
-#         return f'turbo: {get_response_turbo(request)}\ndavinci: {get_response_davinci(request)}'
-#     else:
-#         return get_response_turbo(request)
-#
-# def get_response_turbo(request):
-
     complete_messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": request }
     ]
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=MODEL,
         messages=complete_messages
     )
     answer = response['choices'][0]['message']['content']
@@ -113,22 +109,12 @@ def get_summary(request):
         {"role": "user", "content": request }
     ]
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=MODEL,
         messages=complete_messages
     )
     answer = response['choices'][0]['message']['content']
 
     return answer
-
-# def get_response_davinci(request):
-#     print(f'request: {request}')
-#     response = openai.Completion.create(
-#         model="text-davinci-003",
-#         max_tokens=64,
-#         prompt=request
-#     )
-#     answer = response['choices'][0]['text']
-#     return answer
 
 def get_dialogue(user_input):
     messages.append( {"role": "user", "content": user_input} )
@@ -139,8 +125,7 @@ def get_dialogue(user_input):
             messages[0] = system_backup
             print("<Parenthesis failed! Moving to backup>")
         response = openai.ChatCompletion.create(
-            #model="text-davinci-003",
-            model="gpt-3.5-turbo",
+            model=MODEL,
             messages=messages,
             temperature=0.6
         )
@@ -198,16 +183,14 @@ def summarize(n=5000, summary='', delete=False):
 
     return get_summary(string)
 
-encoding = tiktoken.encoding_for_model("gpt-3.5-turbo-0301")
+ENCODING = tiktoken.encoding_for_model(MODEL)
 def num_tokens_from_messages(messages):
     """Returns the number of tokens used by a list of messages. Copied from OpenAI example"""
-    # encoding = tiktoken.get_encoding("cl100k_base")
-    # if model == "gpt-3.5-turbo-0301":  # note: future models may deviate from this
     num_tokens = 0
     for message in messages:
         num_tokens += 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
         for key, value in message.items():
-            num_tokens += len(encoding.encode(value))
+            num_tokens += len(ENCODING.encode(value))
             if key == "name":  # if there's a name, the role is omitted
                 num_tokens += -1  # role is always required and always 1 token
     num_tokens += 2  # every reply is primed with <im_start>assistant
@@ -235,9 +218,6 @@ def filename(user_input=''):
 ##     ## #########  ##  ##  ####
 ##     ## ##     ##  ##  ##   ###
 ##     ## ##     ## #### ##    ##
-
-# encoding = tiktoken.get_encoding("cl100k_base")
-encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
 print("You wake up in your kennel at the back of the pet store.")
 
@@ -281,6 +261,10 @@ try:
                 history = json.load(open(f'{file}_h.json'))
             else:
                 history = [m for m in messages if m['role'] != 'system']
+            
+            if messages[-1]['role'] == 'user': # If last response is user...
+                messages.pop() # Remove it so user can respond
+                history.pop() # History too
 
             continue
 
@@ -313,9 +297,9 @@ try:
                 if DEBUG: print(f'<Forgetting: {last}>')
                 del messages[1]
 
-except Exception as e:
-    # Unexpected crash. Dump all data
+except Exception as e: # Unexpected error. Dump all data
+    print(e)
     time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
     json.dump(messages, open(f'crash_{time}.json', 'w'), indent='\t')
-    json.dump(history, open(f'crash_{time}_h.json', 'w'), indent='\t')
-    print(e)
+    json.dump(history, open(f'crash_{time}_h.json', 'w'), indent='\t')    
+    print(f'Data saved to crash_{time}.json')

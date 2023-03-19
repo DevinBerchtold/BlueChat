@@ -3,6 +3,7 @@ import json
 import re
 import openai
 import tiktoken
+from datetime import datetime
 
 
 
@@ -21,7 +22,7 @@ DIALOGUE_TRIES = 3
 
 SUMMARIZE = True
 SUMMARIZED = False
-SUMMARIZE_LEN = 2000
+SUMMARIZE_LEN = 1000
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
@@ -50,6 +51,8 @@ system_backup = {"role": "system", "content": f"{setting} {red_character} {red_t
 messages = [
     system_directive
 ]
+
+history = []
 
 SUMMARY_STRING = ''
 
@@ -105,8 +108,8 @@ def messages_string(messages_to_summarize):
 
 def get_summary(request):
     complete_messages = [
-        # {"role": "system", "content": "Summarize this conversation to Red as though he forgot it. Refer to Red as 'You' and refer to Blue as 'They'. Be concise."},
-        {"role": "system", "content": "Summarize this conversation. Be concise."},
+        # {"role": "system", "content": "Summarize this conversation. Be concise."},
+        {"role": "system", "content": "Summarize this conversation."},
         {"role": "user", "content": request }
     ]
     response = openai.ChatCompletion.create(
@@ -129,8 +132,8 @@ def get_summary(request):
 
 def get_dialogue(user_input):
     messages.append( {"role": "user", "content": user_input} )
+    history.append( {"role": "user", "content": user_input} )
 
-    DIALOGUE_TRIES = 5
     for n in range(DIALOGUE_TRIES):
         if n == DIALOGUE_TRIES-1:
             messages[0] = system_backup
@@ -151,6 +154,7 @@ def get_dialogue(user_input):
         if re.match(r"(I'm sorry, )?I (didn't|don't) understand what you (mean|meant)", answer) or re.match(r"(I'm sorry, )?I (didn't|don't|did not|do not) understand what (you were|you are|you're) trying to say", answer):
             print("OpenAI didn't understand that. Please try again.")
             messages.pop()
+            history.pop()
             return False
         
         if DEBUG:
@@ -161,6 +165,7 @@ def get_dialogue(user_input):
     answer = choice['message']['content']
 
     messages.append( { "role": "assistant", "content": answer } )
+    history.append( { "role": "assistant", "content": answer } )
     messages[0] = system_directive
 
     if DEBUG: # print debug info
@@ -170,7 +175,7 @@ def get_dialogue(user_input):
         finish = choice['finish_reason']
         print(f'<dialogue tokens=({prompt}, {completion}, {total}) finish={finish}>')
         
-    print(f'({len(messages)-1}) Red: {answer}')
+    print(f'({len(history)-1}) Red: {answer}')
     return answer
 
 def summarize(n=5000, summary='', delete=False):
@@ -208,6 +213,18 @@ def num_tokens_from_messages(messages):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
+def filename(user_input=''):
+    if re.match(r"!\w*$", user_input): # Just !command, no filename
+    # if user_input == '!save':
+        file = input('Filename: ') # Ask for filename
+    else:
+        file = user_input.split(' ')[1] # Filename after space ('!command filename')
+
+    if file.endswith('.json'): # Remove .json if specified
+        file = file.split('.')[0]
+
+    return file
+
 
 
 
@@ -228,53 +245,77 @@ print(get_response(f"{setting} {blue_perspective} Write a couple sentences to de
 
 print("You see an old man.")
 
-while True:
-    user_input = input(f'({len(messages)}) Blue: ')
+try:
+    while True:
+        # Get a new input
+        user_input = input(f'({len(history)}) Blue: ').strip()
 
-    if user_input == '!summary':
-        print(f'<Summary: {summarize()}>')
-        continue
+        # Process commands
+        if user_input == '!summary':
+            print(f'<Summary: {summarize()}>')
+            continue
 
-    if user_input == '!print':
-        for m in messages:
-            print(m['role']+': '+m['content'])
-        continue
+        if user_input == '!print' or user_input == '!messages':
+            for m in messages:
+                print(m['role']+': '+m['content'])
+            continue
 
-    if user_input == '!repr':
-        print(repr(messages))
-        continue
+        if user_input == '!history':
+            for m in history:
+                print(m['role']+': '+m['content'])
+            continue
 
-    if user_input == '!save':
-        file = input('Filename: ')
-        json.dump(messages, open(file, 'w'), indent='\t')
-        continue
+        if user_input.startswith('!save'):
+            file = filename(user_input)
 
-    if user_input == '!load':
-        file = input('Filename: ')
-        messages = json.load(open(file))
-        continue
+            json.dump(messages, open(f'{file}.json', 'w'), indent='\t')
+            json.dump(history, open(f'{file}_h.json', 'w'), indent='\t')
 
-    if user_input == '!debug':
-        DEBUG = not DEBUG
-        print(f'{DEBUG=}')
-        continue
+            continue
 
-    while not get_dialogue(user_input):
-        user_input = input(f'({len(messages)}) Blue: ')
+        if user_input.startswith('!load'):
+            file = filename(user_input)
 
-    if SUMMARIZE:
-        if num_tokens_from_messages(messages) > MAX_TOKENS:
-            SUMMARY_STRING = summarize(SUMMARIZE_LEN, SUMMARY_STRING, True)
-            if DEBUG: print(f'<Summary: {SUMMARY_STRING}>')
+            messages = json.load(open(f'{file}.json'))
+            if os.path.isfile(f'{file}_h.json'):
+                history = json.load(open(f'{file}_h.json'))
+            else:
+                history = [m for m in messages if m['role'] != 'system']
 
-            if SUMMARIZED == False: # Not already summarized?
-                messages.insert(1, {"role": "system", "content": SUMMARY_STRING})
-                SUMMARIZED = True
-            else: # Replace old summary
-                messages[1] = {"role": "system", "content": SUMMARY_STRING}
+            continue
 
-    else: # If SUMMARIZE = False, just forget oldest messages
-        while num_tokens_from_messages(messages) > MAX_TOKENS:
-            last = messages[1]['content']
-            if DEBUG: print(f'<Forgetting: {last}>')
-            del messages[1]
+        if user_input == '!debug':
+            DEBUG = not DEBUG
+            print(f'{DEBUG=}')
+            continue
+
+        # This isn't a command, process dialogue
+        while not get_dialogue(user_input):
+            user_input = input(f'({len(history)}) Blue: ').strip()
+
+        # Summarize or forget if approaching token limit
+        if SUMMARIZE:
+            if num_tokens_from_messages(messages) > MAX_TOKENS:
+                SUMMARY_STRING = summarize(SUMMARIZE_LEN, SUMMARY_STRING, True)
+                if DEBUG: print(f'<Summary: {SUMMARY_STRING}>')
+
+                if SUMMARIZED: # Already summarized?
+                    # Replace old summary system message
+                    messages[1] = {"role": "system", "content": SUMMARY_STRING}
+                else:
+                    # Add a new summary system message
+                    messages.insert(1, {"role": "system", "content": SUMMARY_STRING})
+                    SUMMARIZED = True
+
+        else: # If SUMMARIZE = False, just forget oldest messages
+            while num_tokens_from_messages(messages) > MAX_TOKENS:
+                last = messages[1]['content']
+                if DEBUG: print(f'<Forgetting: {last}>')
+                del messages[1]
+
+except Exception as e:
+    # Unexpected crash. Dump all data
+    time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+    json.dump(messages, open(f'crash_{time}.json', 'w'), indent='\t')
+    json.dump(history, open(f'crash_{time}_h.json', 'w'), indent='\t')
+    print(e)

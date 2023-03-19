@@ -27,7 +27,7 @@ A conversational engine to experiment with GPT-3.5-Turbo. Contains the setup for
     ```
     py chat.py
     ```
-2. Talk as though you are a cute puppy.
+2. Talk as though you are a cute puppy:
     <details>
     <summary>(Click to expand)</summary>
 
@@ -147,11 +147,11 @@ Commands begin with `!`. Everything else will be interpreted as conversation.
 
 `!print`: Print the messages object.
 
+`!history`: Print full conversation history.
+
 `!save`: Save the messages file to JSON.
 
 `!load`: Load a messages file from JSON.
-
-`!history`: TODO: Full conversation history.
 
 `!summary`: Summarize the conversation so far.
 
@@ -165,17 +165,21 @@ Costs increase linearly on the length of the conversation. Previous messages are
 
 ## Todo
 
-[v] Dynamically summarize old messages.
+- [x] Dynamically summarize old messages
 
-[ ] Tests to verify correctness.
+    - [ ] Tests for correctness and improvement in memory
 
-[ ] GPT-4
+- [ ] Conversation end conditions
+
+- [ ] Group conversations
+
+- [ ] GPT-4
 
 ---
 
 ## Credits
 
-OpenAI
+This project uses [OpenAI API](https://platform.openai.com/) for AI functionality
 
 Dedicated to Blue Berchtold
 

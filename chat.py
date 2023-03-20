@@ -1,9 +1,12 @@
 import os
+import sys
 import json
 import re
+from datetime import datetime
+
 import openai
 import tiktoken
-from datetime import datetime
+
 
 
 
@@ -16,9 +19,9 @@ from datetime import datetime
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
 
 DEBUG = False
-LOAD = False
 MAX_TOKENS = 4000
 DIALOGUE_TRIES = 3
+VALIDATE_FORMAT = False
 
 SUMMARIZE = True
 SUMMARIZED = False
@@ -56,13 +59,6 @@ messages = [
 ]
 
 history = []
-
-SUMMARY_STRING = ''
-
-# LOAD = True
-filename = 'alien.json'
-if LOAD:
-    messages = json.load(open(filename))
 
 
 
@@ -133,7 +129,10 @@ def get_dialogue(user_input):
         answer = response['choices'][0]['message']['content']
 
         # check for match
-        if re.match(r"\([\w ]{1,32}\).*", answer):
+        if VALIDATE_FORMAT:
+            if re.match(r"\([\w ]{1,32}\).*", answer):
+                break
+        else: # Not validating, ignore everything else in loop
             break
 
         if re.match(r"(I'm sorry, )?I (didn't|don't) understand what you (mean|meant)", answer) or re.match(r"(I'm sorry, )?I (didn't|don't|did not|do not) understand what (you were|you are|you're) trying to say", answer):
@@ -151,7 +150,8 @@ def get_dialogue(user_input):
 
     messages.append( { "role": "assistant", "content": answer } )
     history.append( { "role": "assistant", "content": answer } )
-    messages[0] = system_directive
+    if VALIDATE_FORMAT:
+        messages[0] = system_directive
 
     if DEBUG: # print debug info
         completion = response['usage']['completion_tokens']
@@ -163,7 +163,7 @@ def get_dialogue(user_input):
     print(f'({len(history)-1}) Red: {answer}')
     return answer
 
-def summarize(n=5000, summary='', delete=False):
+def summarize(n=5000, delete=False):
     """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""
     i = 1
     if num_tokens_from_messages(messages) > n:
@@ -196,17 +196,28 @@ def num_tokens_from_messages(messages):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
-def filename(user_input=''):
-    if re.match(r"!\w*$", user_input): # Just !command, no filename
+def file(user_input=''):
+    if re.match(r"!\w*$", user_input): # Just '!command', no filename
     # if user_input == '!save':
-        file = input('Filename: ') # Ask for filename
+        filename = input('Filename: ') # Ask for filename
+    else: # '!command filename'
+        filename = user_input.split(' ')[1] # Filename is after space
+
+    if filename.endswith('.json'): # Remove .json if specified
+        filename = filename.split('.')[0]
+
+    return filename
+
+def load(filename):
+    global messages, history
+    messages = json.load(open(f'{filename}.json'))
+    if os.path.isfile(f'{filename}_h.json'):
+        history = json.load(open(f'{filename}_h.json'))
     else:
-        file = user_input.split(' ')[1] # Filename after space ('!command filename')
-
-    if file.endswith('.json'): # Remove .json if specified
-        file = file.split('.')[0]
-
-    return file
+        history = [m for m in messages if m['role'] != 'system']
+    if messages[-1]['role'] == 'user': # If last response is user...
+        messages.pop() # Remove it so user can respond
+        history.pop() # History too
 
 
 
@@ -219,11 +230,24 @@ def filename(user_input=''):
 ##     ## ##     ##  ##  ##   ###
 ##     ## ##     ## #### ##    ##
 
-print("You wake up in your kennel at the back of the pet store.")
+print(sys.argv)
+if len(sys.argv) == 2: # If there's an argument...
+    # Load an existing conversation
+    arg = sys.argv[1]
+    if arg.endswith('.json'):
+        arg = arg.split('.')[0]
+    print(f'Loading {arg}.json')
+    load(arg)
+    # Print last message from loaded file
+    m = messages[-1]['content']
+    print(f'({len(history)-1}) {m}')
 
-print(get_response(f"{setting} {blue_perspective} Write a couple sentences to describe the scene"))
+else: # Setup a new conversation
+    print("You wake up in your kennel at the back of the pet store.")
 
-print("You see an old man.")
+    print(get_response(f"{setting} {blue_perspective} Write a couple sentences to describe the scene"))
+
+    print("You see an old man.")
 
 try:
     while True:
@@ -231,6 +255,10 @@ try:
         user_input = input(f'({len(history)}) Blue: ').strip()
 
         # Process commands
+        if user_input == '!exit':
+            print('Goodbye')
+            break
+
         if user_input == '!summary':
             print(f'<Summary: {summarize()}>')
             continue
@@ -246,26 +274,14 @@ try:
             continue
 
         if user_input.startswith('!save'):
-            file = filename(user_input)
-
-            json.dump(messages, open(f'{file}.json', 'w'), indent='\t')
-            json.dump(history, open(f'{file}_h.json', 'w'), indent='\t')
-
+            filename = file(user_input)
+            json.dump(messages, open(f'{filename}.json', 'w'), indent='\t')
+            json.dump(history, open(f'{filename}_h.json', 'w'), indent='\t')
             continue
 
         if user_input.startswith('!load'):
-            file = filename(user_input)
-
-            messages = json.load(open(f'{file}.json'))
-            if os.path.isfile(f'{file}_h.json'):
-                history = json.load(open(f'{file}_h.json'))
-            else:
-                history = [m for m in messages if m['role'] != 'system']
-            
-            if messages[-1]['role'] == 'user': # If last response is user...
-                messages.pop() # Remove it so user can respond
-                history.pop() # History too
-
+            filename = file(user_input)
+            load(filename)
             continue
 
         if user_input == '!debug':
@@ -280,15 +296,15 @@ try:
         # Summarize or forget if approaching token limit
         if SUMMARIZE:
             if num_tokens_from_messages(messages) > MAX_TOKENS:
-                SUMMARY_STRING = summarize(SUMMARIZE_LEN, SUMMARY_STRING, True)
-                if DEBUG: print(f'<Summary: {SUMMARY_STRING}>')
+                summary = summarize(SUMMARIZE_LEN, True)
+                if DEBUG: print(f'<Summary: {summary}>')
 
                 if SUMMARIZED: # Already summarized?
                     # Replace old summary system message
-                    messages[1] = {"role": "system", "content": SUMMARY_STRING}
+                    messages[1] = {"role": "system", "content": summary}
                 else:
                     # Add a new summary system message
-                    messages.insert(1, {"role": "system", "content": SUMMARY_STRING})
+                    messages.insert(1, {"role": "system", "content": summary})
                     SUMMARIZED = True
 
         else: # If SUMMARIZE = False, just forget oldest messages

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import time
 from datetime import datetime
 
 import openai
@@ -71,15 +72,26 @@ history = []
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
+def chat_complete(messages, model=MODEL, temperature=0.8):
+    for _ in range(5):
+        try:
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=messages,
+                temperature=temperature
+            )
+            return response
+        except Exception as e:
+            print(f"Error: {e} Trying again in 1 second...")
+            time.sleep(1)
+    raise ChatCompletionError("Failed to access OpenAI after 5 attempts.")
+
 def get_response(request):
     complete_messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": request }
     ]
-    response = openai.ChatCompletion.create(
-        model=MODEL,
-        messages=complete_messages
-    )
+    response = chat_complete(complete_messages)
     answer = response['choices'][0]['message']['content']
     return answer
 
@@ -104,10 +116,7 @@ def get_summary(request):
         {"role": "system", "content": "Summarize this conversation."},
         {"role": "user", "content": request }
     ]
-    response = openai.ChatCompletion.create(
-        model=MODEL,
-        messages=complete_messages
-    )
+    response = chat_complete(complete_messages)
     answer = response['choices'][0]['message']['content']
 
     return answer
@@ -120,11 +129,7 @@ def get_dialogue(user_input):
         if n == DIALOGUE_TRIES-1:
             messages[0] = system_backup
             print("<Parenthesis failed! Moving to backup>")
-        response = openai.ChatCompletion.create(
-            model=MODEL,
-            messages=messages,
-            temperature=0.6
-        )
+        response = chat_complete(messages)
 
         answer = response['choices'][0]['message']['content']
 
@@ -160,7 +165,6 @@ def get_dialogue(user_input):
         finish = choice['finish_reason']
         print(f'<dialogue tokens=({prompt}, {completion}, {total}) finish={finish}>')
         
-    print(f'({len(history)-1}) Red: {answer}')
     return answer
 
 def summarize(n=5000, delete=False):
@@ -196,9 +200,8 @@ def num_tokens_from_messages(messages):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
-def file(user_input=''):
+def file(user_input):
     if re.match(r"!\w*$", user_input): # Just '!command', no filename
-    # if user_input == '!save':
         filename = input('Filename: ') # Ask for filename
     else: # '!command filename'
         filename = user_input.split(' ')[1] # Filename is after space
@@ -215,9 +218,14 @@ def load(filename):
         history = json.load(open(f'{filename}_h.json'))
     else:
         history = [m for m in messages if m['role'] != 'system']
+
     if messages[-1]['role'] == 'user': # If last response is user...
         messages.pop() # Remove it so user can respond
         history.pop() # History too
+
+    if messages[1]['role'] == 'system': # Second messages is system...
+        SUMMARIZE = True
+        SUMMARIZED = True
 
 
 
@@ -230,17 +238,19 @@ def load(filename):
 ##     ## ##     ##  ##  ##   ###
 ##     ## ##     ## #### ##    ##
 
-print(sys.argv)
 if len(sys.argv) == 2: # If there's an argument...
     # Load an existing conversation
     arg = sys.argv[1]
     if arg.endswith('.json'):
         arg = arg.split('.')[0]
-    print(f'Loading {arg}.json')
+    print(f'Loading {arg}.json\n')
     load(arg)
     # Print last message from loaded file
-    m = messages[-1]['content']
-    print(f'({len(history)-1}) {m}')
+    print(f"(0) {messages[0]['content']}\n") # Print system message
+    if len(messages) > 2:
+        l = len(history)
+        print(f"({l-1}) {messages[-2]['content']}\n")
+        print(f"({l}) {messages[-1]['content']}\n")
 
 else: # Setup a new conversation
     print("You wake up in your kennel at the back of the pet store.")
@@ -252,7 +262,8 @@ else: # Setup a new conversation
 try:
     while True:
         # Get a new input
-        user_input = input(f'({len(history)}) Blue: ').strip()
+        user_input = input(f'({len(history)+1}) Blue: ').strip()
+        print('')
 
         # Process commands
         if user_input == '!exit':
@@ -290,8 +301,13 @@ try:
             continue
 
         # This isn't a command, process dialogue
-        while not get_dialogue(user_input):
+        answer = get_dialogue(user_input)
+        while not answer:
             user_input = input(f'({len(history)}) Blue: ').strip()
+            print('')
+            answer = get_dialogue(user_input)
+
+        print(f'({len(history)}) Red: {answer}\n')
 
         # Summarize or forget if approaching token limit
         if SUMMARIZE:

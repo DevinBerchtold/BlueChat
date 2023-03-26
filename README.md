@@ -155,6 +155,14 @@ Commands begin with `!`. Everything else will be interpreted as conversation.
 
 `!summary`: Summarize the conversation so far.
 
+`!translate`: Turn Translate Mode on or off.
+
+`!redo`: Go back one step in the conversation.
+
+`!restart`: Delete all messages except system message and restart conversation.
+
+`!exit`: Exit program.
+
 ---
 
 ## Cost

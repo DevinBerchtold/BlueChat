@@ -28,9 +28,15 @@ SUMMARIZE = True
 SUMMARIZED = False
 SUMMARIZE_LEN = 1000
 
+# Translate mode translates requests and responses
+TRANSLATE = False
+USER_LANG = 'English'
+AI_LANG = 'Chinese'
+
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
-
+STREAM = True
+USERNAME = os.getlogin()
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 # Describes the world the story is set in plus more specific details of the room the character is in. Used for AI description and included at the beginning of every chat for context
@@ -72,32 +78,75 @@ history = []
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
-def chat_complete(messages, model=MODEL, temperature=0.8):
+def chat_complete(messages, model=MODEL, temperature=0.8, prefix='', print_result=True):
     for _ in range(5):
         try:
+            t0 = time.time()
             response = openai.ChatCompletion.create(
                 model=model,
                 messages=messages,
-                temperature=temperature
+                temperature=temperature,
+                user=USERNAME,
+                stream=(STREAM and print_result)
             )
-            return response
+            full_string = ''
+            if STREAM and print_result:
+                sys.stdout.write(prefix)
+                sys.stdout.flush()
+                
+                # Iterate through the stream of events
+                collected_chunks = [] # Store all the chunks in a list
+                for chunk in response:
+                    collected_chunks.append(chunk)  # Save the event response
+                    chunk_string = chunk['choices'][0]['delta'].get('content', '')  # Extract the message
+
+                    if chunk_string != '':
+                        full_string += chunk_string
+                        sys.stdout.write(chunk_string)
+                        sys.stdout.flush()
+
+                print('')
+
+                total_time = time.time()-t0
+                if DEBUG: # print debug info
+                    chunks = len(collected_chunks)
+                    finish = chunk['choices'][0]['finish_reason']
+                    print(f'<chat {chunks=}, {finish=}, time={total_time:.3}s>')
+
+                return full_string
+
+            else:
+                full_string = response['choices'][0]['message']['content']
+                if print_result:
+                    print(prefix+full_string+'\n')
+                
+                total_time = time.time()-t0
+
+                if DEBUG: # print debug info
+                    completion = response['usage']['completion_tokens']
+                    prompt = response['usage']['prompt_tokens']
+                    total = response['usage']['total_tokens']
+                    finish = response['choices'][0]['finish_reason']
+                    print(f'<chat tokens=({prompt}, {completion}, {total}), {finish=}, time={total_time:.3}s>')
+    
+            return full_string
+
         except Exception as e:
             print(f"Error: {e} Trying again in 1 second...")
             time.sleep(1)
-    raise ChatCompletionError("Failed to access OpenAI after 5 attempts.")
+    raise ConnectionError("Failed to access OpenAI API after 5 attempts.")
 
 def get_response(request):
     complete_messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": request }
     ]
-    response = chat_complete(complete_messages)
-    answer = response['choices'][0]['message']['content']
+    answer = chat_complete(complete_messages, print_result=False)
     return answer
 
 def messages_string(messages_to_summarize):
     string = ""
-    
+
     for m in messages_to_summarize:
         s = m['content']
         if m['role'] == 'system':
@@ -107,8 +156,16 @@ def messages_string(messages_to_summarize):
             string += f' Blue: {s}'
         if m['role'] == 'assistant':
             string += f' Red: {s}'
-    
+
     return string.strip()
+
+def get_translation(request, from_lang, to_lang):
+    complete_messages = [
+        {"role": "system", "content": f"Translate the {from_lang} input to {to_lang}. Preserve the meaning, tone, and formatting."},
+        {"role": "user", "content": request }
+    ]
+    answer = chat_complete(complete_messages, print_result=True)
+    return answer
 
 def get_summary(request):
     complete_messages = [
@@ -116,22 +173,22 @@ def get_summary(request):
         {"role": "system", "content": "Summarize this conversation."},
         {"role": "user", "content": request }
     ]
-    response = chat_complete(complete_messages)
-    answer = response['choices'][0]['message']['content']
-
+    answer = chat_complete(complete_messages, print_result=False)
     return answer
 
 def get_dialogue(user_input):
     messages.append( {"role": "user", "content": user_input} )
     history.append( {"role": "user", "content": user_input} )
 
+    answer = ''
+    time = 0
+
     for n in range(DIALOGUE_TRIES):
         if n == DIALOGUE_TRIES-1:
             messages[0] = system_backup
             print("<Parenthesis failed! Moving to backup>")
-        response = chat_complete(messages)
-
-        answer = response['choices'][0]['message']['content']
+            
+        answer = chat_complete(messages, prefix=f"\n({len(history)+1}) Red: ")
 
         # check for match
         if VALIDATE_FORMAT:
@@ -145,26 +202,16 @@ def get_dialogue(user_input):
             messages.pop()
             history.pop()
             return False
-        
+
         if DEBUG:
             print('<OpenAI gave unexpected result>')
-            print(response['choices'][0]['message']['content'])
-
-    choice = response['choices'][0]
-    answer = choice['message']['content']
+            print(answer)
 
     messages.append( { "role": "assistant", "content": answer } )
     history.append( { "role": "assistant", "content": answer } )
     if VALIDATE_FORMAT:
         messages[0] = system_directive
 
-    if DEBUG: # print debug info
-        completion = response['usage']['completion_tokens']
-        prompt = response['usage']['prompt_tokens']
-        total = response['usage']['total_tokens']
-        finish = choice['finish_reason']
-        print(f'<dialogue tokens=({prompt}, {completion}, {total}) finish={finish}>')
-        
     return answer
 
 def summarize(n=5000, delete=False):
@@ -223,9 +270,10 @@ def load(filename):
         messages.pop() # Remove it so user can respond
         history.pop() # History too
 
-    if messages[1]['role'] == 'system': # Second messages is system...
-        SUMMARIZE = True
-        SUMMARIZED = True
+    if len(messages) > 1:
+        if messages[1]['role'] == 'system': # Second messages is system...
+            SUMMARIZE = True
+            SUMMARIZED = True
 
 
 
@@ -243,14 +291,14 @@ if len(sys.argv) == 2: # If there's an argument...
     arg = sys.argv[1]
     if arg.endswith('.json'):
         arg = arg.split('.')[0]
-    print(f'Loading {arg}.json\n')
+    print(f'Loading {arg}.json')
     load(arg)
     # Print last message from loaded file
-    print(f"(0) {messages[0]['content']}\n") # Print system message
+    print(f"\n(0) {messages[0]['content']}") # Print system message
     if len(messages) > 2:
         l = len(history)
-        print(f"({l-1}) {messages[-2]['content']}\n")
-        print(f"({l}) {messages[-1]['content']}\n")
+        print(f"\n({l-1}) {messages[-2]['content']}")
+        print(f"\n({l}) {messages[-1]['content']}")
 
 else: # Setup a new conversation
     print("You wake up in your kennel at the back of the pet store.")
@@ -262,13 +310,28 @@ else: # Setup a new conversation
 try:
     while True:
         # Get a new input
-        user_input = input(f'({len(history)+1}) Blue: ').strip()
-        print('')
+        user_input = input(f'\n({len(history)+1}) Blue: ').strip()
+        # print('')
 
         # Process commands
         if user_input == '!exit':
             print('Goodbye')
             break
+
+        if user_input == '!restart':
+            print('Restarting conversation')
+            messages = [messages[0]]
+            history = []
+            continue
+
+        if user_input == '!redo':
+            if len(messages) > 1:
+                print('Removing last 2 messages')
+                messages = messages[:-2]
+                history = history[:-2]
+            else:
+                print('No messages to remove')
+            continue
 
         if user_input == '!summary':
             print(f'<Summary: {summarize()}>')
@@ -295,19 +358,39 @@ try:
             load(filename)
             continue
 
+        if user_input.startswith('!translate'):
+            if user_input == '!translate':
+                TRANSLATE = not TRANSLATE
+            else:
+                split = user_input.split(' ')
+                if len(split) == 2:
+                    TRANSLATE = True
+                    AI_LANG = split[1]
+                    USER_LANG = 'English'
+                elif len(split) == 3:
+                    TRANSLATE = True
+                    AI_LANG = split[1]
+                    USER_LANG = split[2]
+
+            print(f'<Translate={TRANSLATE}, AI={AI_LANG}, User={USER_LANG}>')
+            continue
+
         if user_input == '!debug':
             DEBUG = not DEBUG
             print(f'{DEBUG=}')
             continue
 
+        if TRANSLATE:
+            user_input = get_translation(user_input, USER_LANG, AI_LANG)
+
         # This isn't a command, process dialogue
         answer = get_dialogue(user_input)
         while not answer:
-            user_input = input(f'({len(history)}) Blue: ').strip()
-            print('')
+            user_input = input(f'\n({len(history)}) Blue: ').strip()
             answer = get_dialogue(user_input)
-
-        print(f'({len(history)}) Red: {answer}\n')
+        
+        if TRANSLATE:
+            answer = get_translation(answer, AI_LANG, USER_LANG)
 
         # Summarize or forget if approaching token limit
         if SUMMARIZE:
@@ -333,5 +416,5 @@ except Exception as e: # Unexpected error. Dump all data
     print(e)
     time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
     json.dump(messages, open(f'crash_{time}.json', 'w'), indent='\t')
-    json.dump(history, open(f'crash_{time}_h.json', 'w'), indent='\t')    
+    json.dump(history, open(f'crash_{time}_h.json', 'w'), indent='\t')
     print(f'Data saved to crash_{time}.json')

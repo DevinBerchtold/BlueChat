@@ -21,13 +21,15 @@ import tiktoken
 YAML = True
 if YAML:
     import yaml
-JSON = True
-PROMPT_FILE = 'help'
+JSON = False
+FILENAME = 'help'
 
 DEBUG = False
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
 STREAM = True
+
+FOLDER = 'conversations'
 
 try:
     USER_ID = os.getlogin()
@@ -125,6 +127,14 @@ def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True
             time.sleep(1)
     raise ConnectionError("Failed to access OpenAI API after 5 attempts.")
 
+def get_complete(system, user_request):
+    complete_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_request }
+    ]
+    answer = chat_complete(complete_messages, print_result=False)
+    return answer
+
 def get_response(request):
     complete_messages = [
         {"role": "system", "content": "You are a helpful assistant"},
@@ -162,15 +172,15 @@ def get_summary(request):
  ######   #######  ##    ##    ###    ######## ##     ##  ######  ##     ##    ##    ####  #######  ##    ##
 
 class Conversation:
-    def __init__(self, system=None, filename=None):
-        self.max_tokens = 500
+    def __init__(self, system=None, filename=None, user='Blue', ai='Red'):
+        self.max_tokens = 2000
 
         self.summarize = True
         self.summarized = False
-        self.summarize_len = 200
+        self.summarize_len = 500
 
-        self.user_name = 'Blue'        
-        self.ai_name = 'Red'        
+        self.user_name = user
+        self.ai_name = ai
 
         # Translate requests and responses
         self.translate = False
@@ -182,9 +192,12 @@ class Conversation:
             self.history = []
 
         elif filename:
-            self.load(filename)
+            if not self.load(filename):
+                self.load(FILENAME)
+
         else:
-            self.load(PROMPT_FILE)
+            self.messages = [{"role": "system", "content": "You are a helpful assistant."}]
+            self.history = []
 
     def prefix(self, name):
         return f'\n({len(self.history)+1}) {name}: '
@@ -206,7 +219,7 @@ class Conversation:
 
     def get_dialogue(self, user_input):
         if self.translate:
-            user_input = self.get_translation(user_input, self.user_lang, self.ai_lang)
+            user_input = get_translation(user_input, self.user_lang, self.ai_lang)
 
         message = {"role": "user", "content": user_input}
         self.messages.append(message)
@@ -233,7 +246,7 @@ class Conversation:
         self.history.append(message)
 
         if self.translate:
-            answer = self.get_translation(answer, self.ai_lang, self.user_lang)
+            answer = get_translation(answer, self.ai_lang, self.user_lang)
 
         return answer
 
@@ -255,7 +268,7 @@ class Conversation:
         if DEBUG:
             print(f'<Summarizing: {string}>')
 
-        summary = self.get_summary(string)
+        summary = get_summary(string)
 
         if DEBUG:
             print(f'<Summary: {summary}>')
@@ -269,7 +282,7 @@ class Conversation:
 
         return summary
 
-    if YAML: # YAML copy for readability. Only define functions if needed
+    if YAML: # Only define YAML functions if needed
         def str_presenter(dumper, data): # Change style to | if multiple lines
             s = '|' if '\n' in data else None
             return dumper.represent_scalar('tag:yaml.org,2002:str', data, style=s)
@@ -282,19 +295,32 @@ class Conversation:
         yaml.representer.SafeRepresenter.add_representer(str, str_presenter)
         yaml.representer.SafeRepresenter.add_representer(dict, dict_presenter)
 
-    def load(self, filename):
+    def load(self, filename, output=True):
         self.messages, self.history = [], []
-        if os.path.isfile(f'conversations/{filename}.json'):
-            print(f"Loading {filename}.json")
-            data = json.load(open(f'conversations/{filename}.json', encoding='utf8'))
-        elif YAML:
-            if os.path.isfile(f'conversations/{filename}.yaml'):
-                print(f"Loading {filename}.yaml")
-                data = yaml.safe_load(open(f'conversations/{filename}.yaml', 'r', encoding='utf8'))
+
+        split = filename.split('.')
+        if len(split) == 2: # if filetype specified
+            filename = split[0]
+            filetype = split[1]
+        else:
+            if os.path.isfile(f'conversations/{filename}.json'):
+                filetype = 'json'
+            elif YAML:
+                if os.path.isfile(f'conversations/{filename}.yaml'):
+                    filetype = 'yaml'
+                else:
+                    return False
             else:
                 return False
-        else:
-            return False
+        
+        if filetype == 'json':
+            print(f"Loading {filename}.json")
+            with open(f'conversations/{filename}.json', encoding='utf8') as f:
+                data = json.load(f)
+        elif filetype == 'yaml':
+            print(f"Loading {filename}.yaml")
+            with open(f'conversations/{filename}.yaml', 'r', encoding='utf8') as f:
+                data = yaml.safe_load(f)
 
         # We loaded a file, extract the data
         if isinstance(data, dict):
@@ -315,6 +341,8 @@ class Conversation:
             self.messages = data
         else:
             print('Error: Unknown Data save format')
+
+        self.messages[0]['content'] = self.messages[0]['content'].format(USER_NAME=self.user_name, AI_NAME=self.ai_name)
 
         if self.history == []: # No history? Copy from messages
             self.history = [m for m in self.messages if m['role'] != 'system']
@@ -339,16 +367,17 @@ class Conversation:
 
             # Print last messages from loaded file
             # print(f"\n(0) {messages[0]['content']}") # Print system message
-            if len(self.messages) > 2:
-                l = len(self.history) # Print last question and answer
-                print(f"\n({l-1}) {self.user_name}: {self.messages[-2]['content']}")
-                print(f"\n({l}) {self.ai_name}: {self.messages[-1]['content']}")
+            if output:
+                if len(self.messages) > 2:
+                    l = len(self.history) # Print last question and answer
+                    print(f"\n({l-1}) {self.user_name}: {self.messages[-2]['content']}")
+                    print(f"\n({l}) {self.ai_name}: {self.messages[-1]['content']}")
 
-        return True
+        return filename
 
-    def save(self, filename):
-        if not os.path.exists("conversations"):
-            os.makedirs('conversations')
+    def save(self, filename, output=True):
+        if not os.path.exists(FOLDER):
+            os.makedirs(FOLDER)
 
         # Class instance variables except messages and history (those are listed separate)
         variables = {k: v for k, v in vars(self).items() if k not in ['messages', 'history']}
@@ -357,6 +386,14 @@ class Conversation:
         data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
 
         if YAML:
-            yaml.safe_dump(data, open(f'conversations/{filename}.yaml', 'w', encoding='utf8'), allow_unicode=True, sort_keys=False, width=float("inf"))
+            with open(f'{FOLDER}/{filename}.yaml', 'w', encoding='utf8') as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=float("inf"))
+            if output or DEBUG:
+                print(f"Data saved to {filename}.yaml")
         if JSON:
-            json.dump(data, open(f'conversations/{filename}.json', 'w', encoding='utf8'), indent='\t', ensure_ascii=False, default=str)
+            with open(f'{FOLDER}/{filename}.json', 'w', encoding='utf8') as f:
+                json.dump(data, f, indent='\t', ensure_ascii=False, default=str)
+            if output or DEBUG:
+                print(f"Data saved to {filename}.json")
+
+        return filename

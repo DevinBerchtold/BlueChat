@@ -143,25 +143,29 @@ A conversational engine to experiment with OpenAI GPT Chat API. Contains the set
 
 Commands begin with `!`. Everything else will be interpreted as conversation.
 
-`!debug`: Toggle debug mode on or off.
+`<!debug|!d>`: Toggle debug mode on or off.
 
-`!print`: Print the messages object.
+`<!print|!p>`: Print the messages object.
 
-`!history`: Print full conversation history.
+`<!history|!h>`: Print full conversation history.
 
-`!save`: Save the messages file to JSON.
+`<!save|!s> [filename]`: Save the messages file to JSON/YAML.
 
-`!load`: Load a messages file from JSON.
+`<!load|!l> [filename]`: Load a messages file from JSON/YAML.
 
-`!summary`: Summarize the conversation so far.
+`<!summary|!sum> [num_tokens]`: Summarize `num_tokens` or the conversation so far.
 
-`!translate`: Turn Translate Mode on or off.
+`<!translate|!t> [ai_lang] [user_lang]`: Turn Translate Mode on or off.
 
-`!redo`: Go back one step in the conversation.
+`<!model|!m> [model]`: Changes LLM model if `model` specified. Otherwise, prints current model.
 
-`!restart`: Delete all messages except system message and restart conversation.
+`<!switch|!c>`: Toggle switch mode on or off.
 
-`!exit`: Exit program.
+`<!undo|!u>`: Go back one step in the conversation.
+
+`<!restart|!r>`: Delete all messages except system message and restart conversation.
+
+`<!exit|!x>`: Exit program.
 
 ---
 

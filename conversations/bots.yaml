@@ -1,0 +1,11 @@
+variables: {AI_NAME: Assistant, FILENAME: help}
+bots:
+  facts: Gives definitions for terms and generic knowledge.
+  math: Answers math problems which aren't related to programming.
+  code: Answers programming questions and gives sample code.  
+  chef: Answers cooking questions, creates recipes and meal plans.
+  creative: Provides assistance on creative tasks.  
+  politics: Answers political questions and discussions.
+  dog: Answers dog training and veterinary questions.
+  chinese: Answers requests written in Chinese.
+  blue: The user is pretending to be a dog.

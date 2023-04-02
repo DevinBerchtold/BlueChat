@@ -159,7 +159,7 @@ Commands begin with `!`. Everything else will be interpreted as conversation.
 
 `<!model|!m> [model]`: Changes LLM model if `model` specified. Otherwise, prints current model.
 
-`<!switch|!c>`: Toggle switch mode on or off.
+`<!context|!c>`: Toggle context switch mode on or off.
 
 `<!undo|!u>`: Go back one step in the conversation.
 

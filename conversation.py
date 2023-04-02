@@ -1,11 +1,11 @@
-import os
 import sys
-import json
 import time
 from datetime import datetime
 
 import openai
 import tiktoken
+
+from globals import *
 
 
 
@@ -18,18 +18,10 @@ import tiktoken
 ##    ## ##     ## ##   ### ##    ##    ##    ##     ## ##   ###    ##    ##    ##
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
 
-YAML = True
-if YAML:
-    import yaml
-JSON = False
-FILENAME = 'help'
-
 DEBUG = False
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
 STREAM = True
-
-FOLDER = 'conversations'
 
 try:
     USER_ID = os.getlogin()
@@ -282,45 +274,11 @@ class Conversation:
 
         return summary
 
-    if YAML: # Only define YAML functions if needed
-        def str_presenter(dumper, data): # Change style to | if multiple lines
-            s = '|' if '\n' in data else None
-            return dumper.represent_scalar('tag:yaml.org,2002:str', data, style=s)
-
-        def dict_presenter(dumper, data): # Only flow variables dictionary
-            l = list(data.keys())
-            f = l[0] != 'date' and l != ['role', 'content']
-            return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=f)
-
-        yaml.representer.SafeRepresenter.add_representer(str, str_presenter)
-        yaml.representer.SafeRepresenter.add_representer(dict, dict_presenter)
-
     def load(self, filename, output=True):
-        self.messages, self.history = [], []
 
-        split = filename.split('.')
-        if len(split) == 2: # if filetype specified
-            filename = split[0]
-            filetype = split[1]
-        else:
-            if os.path.isfile(f'conversations/{filename}.json'):
-                filetype = 'json'
-            elif YAML:
-                if os.path.isfile(f'conversations/{filename}.yaml'):
-                    filetype = 'yaml'
-                else:
-                    return False
-            else:
-                return False
-        
-        if filetype == 'json':
-            print(f"Loading {filename}.json")
-            with open(f'conversations/{filename}.json', encoding='utf8') as f:
-                data = json.load(f)
-        elif filetype == 'yaml':
-            print(f"Loading {filename}.yaml")
-            with open(f'conversations/{filename}.yaml', 'r', encoding='utf8') as f:
-                data = yaml.safe_load(f)
+        data = load_file(filename, output=output)
+
+        self.messages, self.history = [], []
 
         # We loaded a file, extract the data
         if isinstance(data, dict):
@@ -366,7 +324,7 @@ class Conversation:
                 self.summarized = True
 
             # Print last messages from loaded file
-            # print(f"\n(0) {messages[0]['content']}") # Print system message
+            print(f"\n(0) {self.messages[0]['content']}") # Print system message
             if output:
                 if len(self.messages) > 2:
                     l = len(self.history) # Print last question and answer
@@ -385,15 +343,7 @@ class Conversation:
         # .strftime('%Y-%m-%d %H:%M:%S')
         data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
 
-        if YAML:
-            with open(f'{FOLDER}/{filename}.yaml', 'w', encoding='utf8') as f:
-                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=float("inf"))
-            if output or DEBUG:
-                print(f"Data saved to {filename}.yaml")
-        if JSON:
-            with open(f'{FOLDER}/{filename}.json', 'w', encoding='utf8') as f:
-                json.dump(data, f, indent='\t', ensure_ascii=False, default=str)
-            if output or DEBUG:
-                print(f"Data saved to {filename}.json")
+        save_file(data, filename, output=output)
 
         return filename
+        

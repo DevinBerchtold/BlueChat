@@ -1,6 +1,7 @@
 import sys
 import time
 from datetime import datetime
+import shutil
 
 import openai
 import tiktoken
@@ -22,6 +23,7 @@ DEBUG = False
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
 STREAM = True
+WORD_WRAP = True
 
 try:
     USER_ID = os.getlogin()
@@ -59,6 +61,74 @@ def num_tokens_from_messages(messages):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
+MAX_LINE_WIDTH = 80
+
+def generate_words(response):
+    """Generates words grouped such that each is a full word, a space, or a newline"""
+    buffer = ''
+
+    for chunk in response:
+        chunk_string = chunk['choices'][0]['delta'].get('content', '')
+
+        for char in chunk_string:
+            if char in [' ', '\n']:
+                if buffer:
+                    yield buffer
+                buffer = ''
+                yield char
+            else:
+                buffer += char
+
+    # Yield the last word after the loop
+    if buffer:
+        yield buffer
+
+def stream_response(prefix, response):
+    
+    if WORD_WRAP:
+        global MAX_LINE_WIDTH
+        MAX_LINE_WIDTH = shutil.get_terminal_size().columns
+        # if DEBUG:
+        print(f'{MAX_LINE_WIDTH=}')
+
+    sys.stdout.write(prefix)
+    sys.stdout.flush()
+
+    current_line = prefix # Prefix minus last space
+
+    full_string = ''
+    if WORD_WRAP:
+        for word in generate_words(response):
+            full_string += word
+            if word == '\n':
+                sys.stdout.write('\n ')
+                current_line = ' '
+            elif word == ' ':
+                if len(current_line) == MAX_LINE_WIDTH:
+                    sys.stdout.write('\n ')
+                    current_line = ' '
+                else:
+                    sys.stdout.write(' ')
+                    current_line += ' '
+            elif len(current_line + word) > MAX_LINE_WIDTH:
+                sys.stdout.write('\n '+word)
+                sys.stdout.flush()
+                current_line = ' '+word
+            else: # word not line wrap
+                sys.stdout.write(word)
+                sys.stdout.flush()
+                current_line += word
+    else:
+        # Iterate through the stream of events
+        for chunk in response:
+            chunk_string = chunk['choices'][0]['delta'].get('content', '')  # Extract the message
+            full_string += chunk_string
+            sys.stdout.write(chunk_string)
+            sys.stdout.flush()
+        print('')
+
+    return full_string
+
 def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True):
     encoding = tiktoken.encoding_for_model(MODEL)
     for _ in range(5):
@@ -73,28 +143,16 @@ def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True
             )
             full_string = ''
             if STREAM and print_result:
-                sys.stdout.write(prefix)
-                sys.stdout.flush()
-
-                # Iterate through the stream of events
-                collected_chunks = [] # Store all the chunks in a list
-                for chunk in response:
-                    collected_chunks.append(chunk)  # Save the event response
-                    chunk_string = chunk['choices'][0]['delta'].get('content', '')  # Extract the message
-
-                    if chunk_string != '':
-                        full_string += chunk_string
-                        sys.stdout.write(chunk_string)
-                        sys.stdout.flush()
-
+                full_string = stream_response(prefix, response)
                 print('')
 
                 total_time = time.time()-t0
                 if DEBUG: # print debug info
-                    chunks = len(collected_chunks)
+                    # chunks = len(collected_chunks)
                     tokens = len(encoding.encode(full_string))
-                    finish = chunk['choices'][0]['finish_reason']
-                    print(f'<chat {chunks=}, {tokens=}, {finish=}, time={total_time:.3}s>')
+                    # finish = collected_chunks[-1]['choices'][0]['finish_reason']
+                    # print(f'<chat {chunks=}, {tokens=}, {finish=}, time={total_time:.3}s>')
+                    print(f'<chat {tokens=}, time={total_time:.3}s>')
 
                 return remove_spaces(full_string) # Remove trailing spaces and return
 
@@ -197,17 +255,17 @@ class Conversation:
     def input(self):
         return remove_spaces(input(self.prefix(self.user_name)))
     
-    def messages_string(self, messages):
-        string = ""
+    def messages_string(self, messages, divider=' '):
+        strings = []
         for m in messages:
             s = m['content']
             if m['role'] == 'system':
-                string += f' {s}'
-            if m['role'] == 'user':
-                string += f' {self.user_name}: {s}'
-            if m['role'] == 'assistant':
-                string += f' {self.ai_name}: {s}'
-        return string.strip()
+                strings.append(f'{s}')
+            elif m['role'] == 'user':
+                strings.append(f'{self.user_name}: {s}')
+            elif m['role'] == 'assistant':
+                strings.append(f'{self.ai_name}: {s}')
+        return divider.join(strings)
 
     def get_dialogue(self, user_input):
         if self.translate:

@@ -2,6 +2,8 @@ import sys
 import re
 from datetime import datetime
 
+import pyperclip
+
 from globals import *
 import conversation
 
@@ -90,8 +92,8 @@ def switch_context(user_input):
 
     assistant = conversation.get_complete(prompt, user_input)
     if DEBUG: print(f'<{assistant=}>')
-    if assistant in BOTS.keys():
-        global FILENAME, FILENUM
+    global FILENAME, FILENUM
+    if assistant in BOTS.keys() and assistant != FILENAME:
         FILENAME=assistant
 
         file = latest_file_today(assistant)
@@ -172,7 +174,7 @@ while True:
             else:
                 print(f'<Summary: {chat.summarize()}>')
 
-        elif command == '!print' or command == '!messages' or command == '!p':
+        elif command == '!print' or command == '!messages':
             for m in chat.messages:
                 print(m['role']+': '+m['content'])
 
@@ -218,7 +220,7 @@ while True:
             DEBUG = not DEBUG
             print(f'<Debug={DEBUG}>')
 
-        elif command == '!context' or command == '!c':
+        elif command == '!context' or command == '!co':
             if FIRST_MESSAGE and SWITCH:
                 SWITCH = False
                 FIRST_MESSAGE = False
@@ -226,11 +228,25 @@ while True:
                 SWITCH = True
                 FIRST_MESSAGE = True
             print(f'<Context switch={SWITCH}>')
+
+        elif command == '!copy' or command == '!c':
+            if parm:
+                if parm == 'all':
+                    n = len(chat.messages)
+                else:
+                    n = int(parm)
+            else:
+                n = 2
+            pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
+            print(f'<Copied {n} messages to clipboard>')
+
+        elif command == '!paste' or command == '!p' or command == '!v':
+            user_input = pyperclip.paste()
+            print(user_input)
         
-    else: # Doesn't start with '!'
-        if SWITCH: # Switch context if necessary
-            if FIRST_MESSAGE:
-                switch_context(user_input)
+    if not user_input.startswith('!'): # Not else. !p can change user_input
+        if SWITCH and FIRST_MESSAGE:
+            switch_context(user_input)
         FIRST_MESSAGE = False
 
         answer = chat.get_dialogue(user_input)

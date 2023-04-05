@@ -1,7 +1,5 @@
-import sys
 import time
 from datetime import datetime
-import shutil
 
 import openai
 import tiktoken
@@ -23,7 +21,6 @@ DEBUG = False
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
 STREAM = True
-WORD_WRAP = True
 
 try:
     USER_ID = os.getlogin()
@@ -61,75 +58,11 @@ def num_tokens_from_messages(messages):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
-MAX_LINE_WIDTH = 80
-
-def generate_words(response):
-    """Generates words grouped such that each is a full word, a space, or a newline"""
-    buffer = ''
-
+def chunks_from_response(response):
     for chunk in response:
-        chunk_string = chunk['choices'][0]['delta'].get('content', '')
+        yield chunk['choices'][0]['delta'].get('content', '')
 
-        for char in chunk_string:
-            if char in [' ', '\n']:
-                if buffer:
-                    yield buffer
-                buffer = ''
-                yield char
-            else:
-                buffer += char
-
-    # Yield the last word after the loop
-    if buffer:
-        yield buffer
-
-def stream_response(prefix, response):
-    
-    if WORD_WRAP:
-        global MAX_LINE_WIDTH
-        MAX_LINE_WIDTH = shutil.get_terminal_size().columns
-        # if DEBUG:
-        print(f'{MAX_LINE_WIDTH=}')
-
-    sys.stdout.write(prefix)
-    sys.stdout.flush()
-
-    current_line = prefix # Prefix minus last space
-
-    full_string = ''
-    if WORD_WRAP:
-        for word in generate_words(response):
-            full_string += word
-            if word == '\n':
-                sys.stdout.write('\n ')
-                current_line = ' '
-            elif word == ' ':
-                if len(current_line) == MAX_LINE_WIDTH:
-                    sys.stdout.write('\n ')
-                    current_line = ' '
-                else:
-                    sys.stdout.write(' ')
-                    current_line += ' '
-            elif len(current_line + word) > MAX_LINE_WIDTH:
-                sys.stdout.write('\n '+word)
-                sys.stdout.flush()
-                current_line = ' '+word
-            else: # word not line wrap
-                sys.stdout.write(word)
-                sys.stdout.flush()
-                current_line += word
-    else:
-        # Iterate through the stream of events
-        for chunk in response:
-            chunk_string = chunk['choices'][0]['delta'].get('content', '')  # Extract the message
-            full_string += chunk_string
-            sys.stdout.write(chunk_string)
-            sys.stdout.flush()
-        print('')
-
-    return full_string
-
-def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True):
+def chat_complete(openai_messages, temperature=0.8, prefix='', max_tokens=None, print_result=True):
     encoding = tiktoken.encoding_for_model(MODEL)
     for _ in range(5):
         try:
@@ -138,12 +71,23 @@ def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True
                 model=MODEL,
                 messages=openai_messages,
                 temperature=temperature,
+                max_tokens=max_tokens,
                 user=USER_ID,
                 stream=(STREAM and print_result)
             )
             full_string = ''
             if STREAM and print_result:
-                full_string = stream_response(prefix, response)
+                if WORD_WRAP:
+                    full_string = print_wrapped(chunks_from_response(response), prefix=prefix)
+                else:
+                    # Iterate through the stream of events
+                    sys.stdout.write(prefix)
+                    sys.stdout.flush()
+                    for chunk in response:
+                        chunk_string = chunk['choices'][0]['delta'].get('content', '')  # Extract the message
+                        full_string += chunk_string
+                        sys.stdout.write(chunk_string)
+                        sys.stdout.flush()
                 print('')
 
                 total_time = time.time()-t0
@@ -154,12 +98,10 @@ def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True
                     # print(f'<chat {chunks=}, {tokens=}, {finish=}, time={total_time:.3}s>')
                     print(f'<chat {tokens=}, time={total_time:.3}s>')
 
-                return remove_spaces(full_string) # Remove trailing spaces and return
-
             else:
                 full_string = response['choices'][0]['message']['content']
                 if print_result:
-                    print(prefix+full_string+'\n')
+                    print('\n'+prefix+full_string)
 
                 total_time = time.time()-t0
 
@@ -170,45 +112,33 @@ def chat_complete(openai_messages, temperature=0.8, prefix='', print_result=True
                     finish = response['choices'][0]['finish_reason']
                     print(f'<chat tokens=({prompt}, {completion}, {total}), {finish=}, time={total_time:.3}s>')
 
-                return remove_spaces(full_string) # Remove trailing spaces and return
+            # return remove_spaces(full_string) # Remove trailing spaces and return
+            return full_string
 
         except Exception as e:
             print(f"Error: {e} Trying again in 1 second...")
             time.sleep(1)
     raise ConnectionError("Failed to access OpenAI API after 5 attempts.")
 
-def get_complete(system, user_request):
+def get_complete(system, user_request, max_tokens=None, print_result=True):
     complete_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_request }
     ]
-    answer = chat_complete(complete_messages, print_result=False)
+    answer = chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result)
     return answer
 
 def get_response(request):
-    complete_messages = [
-        {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": request }
-    ]
-    answer = chat_complete(complete_messages, print_result=False)
-    return answer
+    return get_complete("You are a helpful assistant", request, print_result=False)
 
 def get_translation(request, from_lang, to_lang):
-    complete_messages = [
-        {"role": "system", "content": f"Translate the {from_lang} input to {to_lang}. Preserve the meaning, tone, and formatting."},
-        {"role": "user", "content": request }
-    ]
-    answer = chat_complete(complete_messages, print_result=True)
-    return answer
+    return get_complete(
+        f"Translate the {from_lang} input to {to_lang}. Preserve the meaning, tone, and formatting.",
+        request, print_result=False
+    )
 
 def get_summary(request):
-    complete_messages = [
-        # {"role": "system", "content": "Summarize this conversation. Be concise."},
-        {"role": "system", "content": "Summarize this conversation."},
-        {"role": "user", "content": request }
-    ]
-    answer = chat_complete(complete_messages, print_result=False)
-    return answer
+    return get_complete("Summarize this conversation.", request, print_result=False)
 
 
 
@@ -224,6 +154,7 @@ def get_summary(request):
 class Conversation:
     def __init__(self, system=None, filename=None, user='Blue', ai='Red'):
         self.max_tokens = 2000
+        self.token_warning = 1000
 
         self.summarize = True
         self.summarized = False
@@ -250,22 +181,37 @@ class Conversation:
             self.history = []
 
     def prefix(self, name):
-        return f'\n({len(self.history)+1}) {name}: '
+        return f'{len(self.history)+1}) {name}: '
     
     def input(self):
         return remove_spaces(input(self.prefix(self.user_name)))
     
+    def message_string(self, message):
+        s = message['content']
+        if message['role'] == 'system':
+            return f'{s}'
+        elif message['role'] == 'user':
+            return f'{self.user_name}: {s}'
+        elif message['role'] == 'assistant':
+            return f'{self.ai_name}: {s}'
+    
     def messages_string(self, messages, divider=' '):
         strings = []
         for m in messages:
-            s = m['content']
-            if m['role'] == 'system':
-                strings.append(f'{s}')
-            elif m['role'] == 'user':
-                strings.append(f'{self.user_name}: {s}')
-            elif m['role'] == 'assistant':
-                strings.append(f'{self.ai_name}: {s}')
+            strings.append(self.message_string(m))
         return divider.join(strings)
+    
+    def print_messages(self, messages, first=None, last=None):
+        if first == None: first = 0
+        elif first < 0: first += len(messages)
+
+        if last == None: last = len(messages)
+        elif last < 0: last += len(messages)
+
+        if last == first: last += 1 #if they're the same, bump last so we return 1
+        for n, m in enumerate(messages[first:last], start=first):
+            print_wrapped(f"{n}) {self.message_string(m)}")
+            print('')
 
     def get_dialogue(self, user_input):
         if self.translate:
@@ -273,11 +219,11 @@ class Conversation:
 
         message = {"role": "user", "content": user_input}
         self.messages.append(message)
-        self.history.append(message)        
+        self.history.append(message)
 
+        total_tokens = num_tokens_from_messages(self.messages)
         # Summarize or forget if approaching token limit
         if self.summarize:
-            total_tokens = num_tokens_from_messages(self.messages)
             if DEBUG:
                 print(f'<{total_tokens=}>')
             if total_tokens > self.max_tokens:
@@ -297,6 +243,9 @@ class Conversation:
 
         if self.translate:
             answer = get_translation(answer, self.ai_lang, self.user_lang)
+
+        if total_tokens > self.token_warning:
+            print(f'<Warning: {total_tokens} tokens. Consider restarting conversation to save money>')
 
         return answer
 
@@ -382,12 +331,11 @@ class Conversation:
                 self.summarized = True
 
             # Print last messages from loaded file
-            print(f"\n(0) {self.messages[0]['content']}") # Print system message
+            print('')
+            self.print_messages(self.messages, 0, 0)
             if output:
                 if len(self.messages) > 2:
-                    l = len(self.history) # Print last question and answer
-                    print(f"\n({l-1}) {self.user_name}: {self.messages[-2]['content']}")
-                    print(f"\n({l}) {self.ai_name}: {self.messages[-1]['content']}")
+                    self.print_messages(self.messages, -2)
 
         return filename
 

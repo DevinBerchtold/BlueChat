@@ -1,6 +1,7 @@
+import sys
 import os
 import json
-
+import shutil
 
 
 
@@ -22,6 +23,9 @@ JSON = False
 FILENAME = 'help'
 FOLDER = 'conversations'
 
+WORD_WRAP = True
+WRAP_WIDTH = 80
+
 
 
 
@@ -32,6 +36,62 @@ FOLDER = 'conversations'
 ##       ##     ## ##  #### ##          ##     ##  ##     ## ##  ####       ##
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
+
+def generate_words(chunks):
+    """Generates words grouped such that each is a full word, a space, or a newline"""
+    buffer = ''
+    for chunk in chunks:
+        for char in chunk:
+            if char in [' ', '\n']:
+                if buffer:
+                    yield buffer
+                buffer = ''
+                yield char
+            else:
+                buffer += char
+    if buffer: # Yield the last word after the loop
+        yield buffer
+
+def print_wrapped(chunks, prefix=''):
+    full_string = ''
+    if WORD_WRAP:
+        if isinstance(chunks, str):
+            chunks = [chunks] # We expect a list of strings
+        
+        max_line_width = shutil.get_terminal_size().columns
+        sys.stdout.write(prefix)
+        sys.stdout.flush()
+        current_line = prefix # Prefix minus last space
+        for word in generate_words(chunks):
+            full_string += word
+            if word == '\n':
+                sys.stdout.write('\n ')
+                current_line = ' '
+            elif word == ' ':
+                if len(current_line) == max_line_width:
+                    sys.stdout.write(' \n ')
+                    current_line = ' '
+                else:
+                    sys.stdout.write(' ')
+                    current_line += ' '
+            elif len(current_line + word) > max_line_width-1:
+                sys.stdout.write('\n '+word)
+                sys.stdout.flush()
+                current_line = ' '+word
+            else: # word not line wrap
+                sys.stdout.write(word)
+                sys.stdout.flush()
+                current_line += word
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+    else:
+        for chunk in chunks:
+            sys.stdout.write(chunk)
+            full_string += chunk
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+
+    return full_string
 
 if YAML: # Only define YAML functions if needed
     def str_presenter(dumper, data): # Change style to | if multiple lines
@@ -46,7 +106,6 @@ if YAML: # Only define YAML functions if needed
 
     yaml.representer.SafeRepresenter.add_representer(str, str_presenter)
     yaml.representer.SafeRepresenter.add_representer(dict, dict_presenter)
-
 
 def load_file(filename, output=False):
     split = filename.split('.')
@@ -75,7 +134,6 @@ def load_file(filename, output=False):
             data = yaml.safe_load(f)
             return data
     return False
-
 
 def save_file(data, filename, output=False):
     if YAML:

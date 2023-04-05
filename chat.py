@@ -88,11 +88,12 @@ def switch_context(user_input):
     if DEBUG: print('Checking context...')
     
     bot_string = '\n'.join( [f'{k}: {v}' for k, v in BOTS.items()] )
-    prompt = f"You are the first interface to the user for BlueChat, a series of helpful chatbots. Your job is to route the user's request to the bot which can best handle the request. The following bots are available:\n{bot_string}\nRespond with the name of the best bot for this interaction. If none of the bots are suited for the request or you are unsure, say 'idk'. Do not talk to the user. Only say a bot name or 'idk'"
+    prompt = f"You are a routing system a series of helpful chatbots. You connect the users request to the chatbot which is best for it. Give the name of the best chatbot for this interaction and say nothing else. If none of the chatbots fit or you are unsure, say 'idk'. Choose from these chatbots:\n{bot_string}"
 
-    assistant = conversation.get_complete(prompt, user_input)
+    assistant = conversation.get_complete(prompt, user_input, max_tokens=16, print_result=False)
     if DEBUG: print(f'<{assistant=}>')
     global FILENAME, FILENUM
+    print(BOTS.keys())
     if assistant in BOTS.keys() and assistant != FILENAME:
         FILENAME=assistant
 
@@ -105,6 +106,8 @@ def switch_context(user_input):
         if DEBUG: print(f'Switching to {create_filename()}...')
         return assistant
     else:
+        if assistant.strip() != 'idk':
+            print(f'<Context switch unknown response: {assistant}>\n')
         return False
 
 
@@ -140,6 +143,7 @@ else: # Setup a new conversation
 while True:
     # Get a new input
     user_input = chat.input()
+    print('')
 
     if user_input.startswith('!'):
         input_split = user_input.split(' ')
@@ -150,42 +154,40 @@ while True:
             parm = ''
 
         # Process commands
-        if command == '!exit' or command == '!x':
-            print('Goodbye')
+        if command == '!exit' or command == '!e' or command == '!x':
+            print('<Goodbye>')
             break
 
         elif command == '!restart' or command == '!r':
-            print('Restarting conversation')
+            print('<Restarting conversation>\n')
             chat.load(FILENAME)
             parse_filename(latest_file_today(FILENAME))
             FILENUM += 1
 
         elif command == '!redo' or command == '!undo' or command == '!u':
             if len(chat.messages) > 1:
-                print('Removing last 2 messages')
+                print('<Removing last 2 messages>\n')
                 chat.messages = chat.messages[:-2]
                 chat.history = chat.history[:-2]
             else:
-                print('No messages to remove')
+                print('<No messages to remove>\n')
 
         elif command == '!summary' or command == '!sum':
             if parm:
-                print(f'<Summary: {chat.summarize(int(parm))}>')
+                print_wrapped(f'<Summary: {chat.summarize_messages(int(parm))}>\n')
             else:
-                print(f'<Summary: {chat.summarize()}>')
+                print_wrapped(f'<Summary: {chat.summarize_messages()}>\n')
 
         elif command == '!print' or command == '!messages':
-            for m in chat.messages:
-                print(m['role']+': '+m['content'])
+            chat.print_messages(chat.messages)
 
         elif command == '!history' or command == '!h':
-            for m in chat.history:
-                print(m['role']+': '+m['content'])
+            chat.print_messages(chat.history)
 
         elif command == '!save' or command == '!s':
             if parm:
                 chat.save(parm)
-                print(f"Data saved to {parm}")
+                print(f"<Data saved to {parm}>\n")
             else:
                 chat.save(create_filename())
 
@@ -194,12 +196,12 @@ while True:
             if parm:
                 load_latest(parm)
             else:
-                print('Error: No filename specified')
+                print('<Error: No filename specified>\n')
 
         elif command == '!model' or command == '!m':
             if parm:
                 conversation.MODEL = parm
-            print(f"<Model: {conversation.MODEL}>")
+            print(f"<Model: {conversation.MODEL}>\n")
 
         elif command == '!translate' or command == '!t':
             if user_input == '!translate' or user_input == '!t':
@@ -214,20 +216,20 @@ while True:
                     chat.ai_lang = parm
                     chat.user_lang = input_split[2]
 
-            print(f'<Translate={chat.translate}, AI={chat.ai_lang}, User={chat.user_lang}>')
+            print(f'<Translate={chat.translate}, AI={chat.ai_lang}, User={chat.user_lang}>\n')
 
         elif command == '!debug' or command == '!d':
             DEBUG = not DEBUG
-            print(f'<Debug={DEBUG}>')
+            print(f'<Debug={DEBUG}>\n')
 
-        elif command == '!context' or command == '!co':
+        elif command == '!auto' or command == '!a':
             if FIRST_MESSAGE and SWITCH:
                 SWITCH = False
                 FIRST_MESSAGE = False
             else:
                 SWITCH = True
                 FIRST_MESSAGE = True
-            print(f'<Context switch={SWITCH}>')
+            print(f'<Auto-switch={SWITCH}>\n')
 
         elif command == '!copy' or command == '!c':
             if parm:
@@ -238,7 +240,7 @@ while True:
             else:
                 n = 2
             pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
-            print(f'<Copied {n} messages to clipboard>')
+            print(f'<Copied {n} messages to clipboard>\n')
 
         elif command == '!paste' or command == '!p' or command == '!v':
             user_input = pyperclip.paste()

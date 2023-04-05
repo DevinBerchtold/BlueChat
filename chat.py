@@ -93,7 +93,6 @@ def switch_context(user_input):
     assistant = conversation.get_complete(prompt, user_input, max_tokens=16, print_result=False)
     if DEBUG: print(f'<{assistant=}>')
     global FILENAME, FILENUM
-    print(BOTS.keys())
     if assistant in BOTS.keys() and assistant != FILENAME:
         FILENAME=assistant
 

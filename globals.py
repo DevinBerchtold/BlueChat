@@ -3,6 +3,14 @@ import os
 import json
 import shutil
 
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.padding import Padding
+
+console = Console()
+
+
 
 
  ######   #######  ##    ##  ######  ########    ###    ##    ## ########  ######
@@ -23,8 +31,7 @@ JSON = False
 FILENAME = 'help'
 FOLDER = 'conversations'
 
-WORD_WRAP = True
-WRAP_WIDTH = 80
+FORMAT = True
 
 
 
@@ -36,6 +43,12 @@ WRAP_WIDTH = 80
 ##       ##     ## ##  #### ##          ##     ##  ##     ## ##  ####       ##
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
+
+def clear_screen():
+    if os.name == 'nt':   # For Windows
+        os.system('cls')
+    elif os.name == 'posix':  # For Linux and macOS
+        os.system('clear')
 
 def generate_words(chunks):
     """Generates words grouped such that each is a full word, a space, or a newline"""
@@ -52,43 +65,26 @@ def generate_words(chunks):
     if buffer: # Yield the last word after the loop
         yield buffer
 
-def print_wrapped(chunks, prefix=''):
+def print_markdown(markdown):
+    console.print(Padding(Markdown(markdown), (0, 1)))
+
+def print_stream(chunks):
     full_string = ''
-    if WORD_WRAP:
-        if isinstance(chunks, str):
-            chunks = [chunks] # We expect a list of strings
-        
-        max_line_width = shutil.get_terminal_size().columns
-        sys.stdout.write(prefix)
-        sys.stdout.flush()
-        current_line = prefix # Prefix minus last space
-        for word in generate_words(chunks):
-            full_string += word
-            if word == '\n':
-                sys.stdout.write('\n ')
-                current_line = ' '
-            elif word == ' ':
-                if len(current_line) == max_line_width:
-                    sys.stdout.write(' \n ')
-                    current_line = ' '
-                else:
-                    sys.stdout.write(' ')
-                    current_line += ' '
-            elif len(current_line + word) > max_line_width-1:
-                sys.stdout.write('\n '+word)
-                sys.stdout.flush()
-                current_line = ' '+word
-            else: # word not line wrap
-                sys.stdout.write(word)
-                sys.stdout.flush()
-                current_line += word
-        sys.stdout.write('\n')
-        sys.stdout.flush()
+    if FORMAT:
+        live = Live(console=console, refresh_per_second=16)
+        with live:
+            # for word in generate_words(chunks):
+            for w in generate_words(chunks):
+                full_string += w
+                if not w.isspace():
+                    markdown = Padding(Markdown(full_string), (0, 1))
+                    live.update(markdown)
+            markdown = Padding(Markdown(full_string), (0, 1))
+            live.update(markdown)
     else:
-        for chunk in chunks:
-            sys.stdout.write(chunk)
-            full_string += chunk
-        sys.stdout.write('\n')
+        for c in chunks:
+            sys.stdout.write(c)
+            full_string += c
         sys.stdout.flush()
 
     return full_string
@@ -101,7 +97,7 @@ if YAML: # Only define YAML functions if needed
     def dict_presenter(dumper, data): # Only flow variables dictionary
         l = list(data.keys())
         # All these != data will be shown on multiple lines in output
-        f = l[0] != 'date' and l != ['role', 'content'] and l[0] != 'variables' and l[0] != 'facts'
+        f = (l[0] != 'date') and (l != ['role', 'content']) and (l[0] != 'variables') and (l[0] not in ['fact', 'help'])
         return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=f)
 
     yaml.representer.SafeRepresenter.add_representer(str, str_presenter)
@@ -139,11 +135,15 @@ def save_file(data, filename, output=False):
     if YAML:
         with open(f'{FOLDER}/{filename}.yaml', 'w', encoding='utf8') as f:
             yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=float("inf"))
-        if output or DEBUG:
-            print(f"Data saved to {filename}.yaml")
+        if output:
+            console.print(f"Data saved to {filename}.yaml")
+        elif DEBUG:
+            console.log(f"Data saved to {filename}.yaml")
     if JSON:
         with open(f'{FOLDER}/{filename}.json', 'w', encoding='utf8') as f:
             json.dump(data, f, indent='\t', ensure_ascii=False, default=str)
-        if output or DEBUG:
-            print(f"Data saved to {filename}.json")
+        if output:
+            console.print(f"Data saved to {filename}.json")
+        elif DEBUG:
+            console.log(f"Data saved to {filename}.json")
             

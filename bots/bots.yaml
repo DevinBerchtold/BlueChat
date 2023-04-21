@@ -1,0 +1,15 @@
+variables: {USER_NAME: Devin, DEFAULT: help, FILENAME: creative, SWITCH: true}
+bots:
+  fact: Gives encyclopedia entries for things and ideas.
+  dictionary: Gives definitions for words and slang.
+  thesaurus: Gives synonyms and antonyms to words.
+  chef: Answers cooking questions, creates recipes and meal plans.
+  math: Answers math problems which aren't related to programming.
+  code: Answers programming questions and gives sample code.
+  doctor: Provides diagnosis for diseases and personal medical assistance.
+  dog: Answers dog training and veterinary questions.
+  politics: Answers political questions and discussions.
+  creative: Provides assistance on creative tasks.
+  lawyer: Answers questions related to the law.
+  tax: Provides assistance on taxes.
+  help: All other questions.

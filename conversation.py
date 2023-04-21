@@ -132,8 +132,8 @@ class Conversation:
         self.reset(filename=filename, system=system)
 
     def reset(self, filename=None, system=None):
-        self.max_tokens = 800
-        self.token_warning = 400
+        self.max_tokens = 1000
+        self.token_warning = 500
         self.cost = 0
 
         self.summarize = True
@@ -150,7 +150,7 @@ class Conversation:
             self.history = []
         elif filename:
             if not self.load(filename, output=True):
-                self.load(FILENAME, output=True)
+                console.print("Error: Couldn't load file on reset()")
     
     def input(self):
         return console.input(self.user_prefix())
@@ -159,17 +159,18 @@ class Conversation:
         if messages == None:
             messages = self.messages
         return num_tokens_from_messages(messages, self.model)
-    
-    def prefix(self, n, name, color):
-        if not n:
-            n = len(self.history)+1
-        return f'\n[bold {color}]{n} {name}:[/] '
 
     def user_prefix(self, n=None):
-        return self.prefix(n, self.user_name, 'blue')
+        if not n:
+            n = len(self.history)+1
+        return f'\n[user_label]{n} {self.user_name}:[/] '
 
     def ai_prefix(self, n=None):
-        return self.prefix(n, self.ai_name, 'red')         
+        if not n:
+            n = len(self.history)+1
+        
+        model = 'GPT-4' if self.model == 'gpt-4' else 'GPT-3.5'
+        return f'\n[ai_label]{n} {self.ai_name}: [dim]{model}[/] '
     
     def message_prefix(self, message, n):
         if message['role'] == 'system':
@@ -207,7 +208,6 @@ class Conversation:
         for n, m in enumerate(messages[first:last], start=first):
             console.print(self.message_prefix(m, n))
             print_markdown(m['content'])
-            # console.print(Padding(Markdown(), (0, 1)))
 
     def complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
         if not messages:
@@ -219,7 +219,8 @@ class Conversation:
             else:
                 messages=self.messages
         
-        console.print(prefix)
+        if prefix:
+            console.print(prefix)
         answer = chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result)
         answer_list = [{"role": "assistant", "content": answer}]
         cost = self.num_tokens() + self.num_tokens(answer_list)*2 # prompt cost + 2 x response cost
@@ -241,8 +242,8 @@ class Conversation:
         total_tokens = self.num_tokens()
         # Summarize or forget if approaching token limit
         summary_cost = 0
-        if self.summarize:
-            if total_tokens > self.max_tokens:
+        if self.summarize and total_tokens > self.max_tokens:
+            with status_spinner('Consolidating memory...'):
                 _, summary_cost = self.summarize_messages(self.summarize_len, delete=True)
 
         else: # If self.summarize = False, just forget oldest messages
@@ -271,11 +272,9 @@ class Conversation:
                 cost_string += f' (+{message_cost:.2f}={self.cost:.2f})'
 
         if total_tokens > self.token_warning:
-            print_markdown(f'#### {cost_string} Consider restarting conversation to save money')
-            # console.print(f'[grey30]<{cost_string} Consider restarting conversation to save money>[/]')
+            console.print(f'[dim]{cost_string} Consider restarting conversation[/]', justify='center')
         elif MONEY:
-            print_markdown(f'#### {cost_string}')
-            # console.print(f'[grey30]<{cost_string}>[/]')
+            console.print(f'[dim]{cost_string}[/]', justify='center')
 
         return answer
 
@@ -311,9 +310,15 @@ class Conversation:
     def load(self, filename, output=True):
 
         data = load_file(filename, output=False)
+        if not data:
+            console.print(f"Error: Couldn't load file {filename}")
+            return False
         if output:
-            # print_markdown('----')
-            print_markdown(f'----\n### {filename.capitalize()}')
+            print_markdown('----')
+            folder, file = filename.split('/')
+            file_text = ' [dim]-[/] '.join(file.capitalize().split('_'))
+            f = f'[dim]{folder}/ [/][bold]{file_text}'
+            console.print(f, justify='center')
 
         self.messages, self.history = [], []
 
@@ -338,10 +343,14 @@ class Conversation:
             self.messages = data
         else:
             console.print('Error: Unknown Data save format')
-        if output and variables:
+        if DEBUG and variables:
             console.print(' ' + ', '.join(variables))
 
-        self.messages[0]['content'] = self.messages[0]['content'].format(USER_NAME=self.user_name, AI_NAME=self.ai_name)
+        self.messages[0]['content'] = self.messages[0]['content'].format(
+            USER_NAME=self.user_name,
+            AI_NAME=self.ai_name,
+            TODAY=TODAY
+        )
 
         if self.history == []: # No history? Copy from messages
             self.history = [m for m in self.messages if m['role'] != 'system']
@@ -368,14 +377,13 @@ class Conversation:
             if output:
                 self.print_messages(self.messages, 0, 0)
                 if len(self.messages) > 2:
+                    if len(self.messages) > 3: # print '...' if not all messages printed
+                        console.print('\n...', justify='center')
                     self.print_messages(self.messages, -2)
 
         return filename
 
     def save(self, filename, output=True):
-        if not os.path.exists(FOLDER):
-            os.makedirs(FOLDER)
-
         # Class instance variables except messages and history (those are listed separate)
         variables = {k: v for k, v in vars(self).items() if k not in UNSAVED_VARIABLES}
         date = datetime.now()

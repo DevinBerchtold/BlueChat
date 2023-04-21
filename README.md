@@ -1,6 +1,15 @@
 # BlueChat
 
-A conversational engine to experiment with OpenAI GPT Chat API. Contains the setup for a basic conversation between two characters. Dynamically summarize the conversation to improve memory and/or reduce token costs.
+A conversational engine for experimenting with OpenAI GPT Chat API. Enables a basic 2-way conversation between the user and an AI, or between two AIs.
+
+* Create custom prompts to chat with any AI and seamlessly switch between them (e.g., story characters, assistants, teachers)
+* Automatically save chats and easily continue past conversations
+* Dynamically summarize conversations to enhance memory and reduce token costs
+* More reliable and likely cheaper than a ChatGPT subscription (depending on usage)
+* Chat with your AIs via the terminal like you're in a sci-fi movie
+
+![Example Usage](image/example.gif)
+
 
 ---
 
@@ -10,6 +19,9 @@ A conversational engine to experiment with OpenAI GPT Chat API. Contains the set
 2. Install the required Python libraries:
     * [OpenAI](https://platform.openai.com/docs/api-reference/introduction?lang=python)
     * [tiktoken](https://github.com/openai/tiktoken)
+    * [Rich](https://pypi.org/project/rich/)
+    * [Pyperclip](https://pypi.org/project/pyperclip/)
+    * [PyYAML](https://pypi.org/project/PyYAML/) (Recommended)
 3. Add your OpenAI API key:
 
     ```
@@ -27,167 +39,43 @@ A conversational engine to experiment with OpenAI GPT Chat API. Contains the set
     ```
     py chat.py
     ```
-2. Talk as though you are a cute puppy:
-    <details>
-    <summary>(Click to expand)</summary>
 
-    Example (GPT 3.5 Turbo):
+2. Talk as though you are a cute puppy or ask questions to one of the many assistants.
 
-    ```
-    You wake up in your kennel at the back of the pet store.
-    
-    The quietness of the pet store fills the air as you relax in your kennel. Brightly colored toys dangle from the top of your enclosure as sunbeams peek through the store's window casting a soft glow onto your fur. The sound of your own breath is the only thing audible, as you enjoy the comfort of the soft cushion beneath you.
-    
-    You see an old man.
-    
-    Blue: *woof*
-    
-    Red: (Surprised) "What in the world was that?"
-    
-    Blue: *whimpers, looking cute*
-    
-    Red: (Skeptical) "Is that dog making noises? That can't be right."
-    
-    Blue: *barks cheerfully*
-    
-    Red: (Annoyed) "Great, now the dog is barking. Just what I need, more noise."
-    
-    Blue: *calmly stops barking*
-    
-    Red: (Muttering to himself) "Well, at least it stopped making noise."
-    
-    Blue: H-Hello
-    
-    Red: (Surprised) "Did that dog just say hello? That's impossible."
-    
-    Blue: Hi sir
-    
-    Red: (Shocked) "This can't be happening. A talking dog? Am I losing my mind?"
-    
-    Blue: I thought the same thing myself
-    
-    Red: (Confused) "What is going on here? How are you able to talk?"
-    
-    Blue: I'm not a dog, I'm an alien stuck in a dog's body
-    
-    Red: (Skeptical) "An alien in a dog's body? That's the most ridiculous thing I've ever heard."
-    
-    Blue: Do you have a better explanation why I could talk?
-    
-    Red: (Shrugging) "No, I don't. But it's still hard to believe. I think I need to sit down."
-    
-    Blue: It's okay sir, take your time
-    
-    Red: (Calmly) "Okay, let me process this. So, you are an alien trapped in a dog's body. How did you end up here?"
-    
-    Blue: Well, I don't really remeber. I remember an operating table
-    
-    Red: (Surprised) "An operating table? That sounds like a very strange experience. Do you have any idea how you ended up in a dog's body?"
-    
-    Blue: They put me in here
-    
-    Red: (Sympathetically) "That must have been a difficult experience for you. But how did you end up in this pet store?"
-    
-    Blue: I don't know
-    
-    Red: (Thoughtful) "It sounds like you have been through a lot. Maybe we should try to find out more about how you ended up here. Do you remember anything else that could help us figure it out?"
-    
-    Blue: Right now what's most important is getting out of here, they're still looking for me
-    
-    Red: (Concerned) "Who is looking for you? Do you know who they are?"
-    
-    Blue: The other aliens. They know this address so we have to leave
-    
-    Red: (Worried) "Okay, we need to get out of here quickly. Do you have any idea where we should go?"
-    
-    Blue: Probably just a motel room where we can lay low.
-    
-    Red: (Nodding) "That's a good idea. Let's get out of here and find a safe place to stay. I'll take you with me and we'll figure out what to do next."
-    
-    Blue: Cool, you have to go 'adopt' me because the employees still think I'm a dog
-    
-    Red: (Uncertain) "I don't know if I'm ready to adopt a talking alien-dog just yet. But I guess we don't have much of a choice. Let's go."
-    
-    Blue: Alright sounds good. You won't regret this
-    
-    Red: (Skeptical) "I hope not. Let's just get out of here before we attract any unwanted attention."
-    
-    Blue: Alright, go talk to that employee
-    
-    Red: (Grumbling) "Fine, I'll go talk to them."
-    
-    (Red walks up to the employee at the front desk.)
-    
-    Red: "Excuse me, I need to adopt that dog over there."
-    
-    Employee: "Great! Let me just get the paperwork ready for you."
-    
-    (Red fills out the paperwork and pays the adoption fee.)
-    
-    Employee: "Congratulations on your new pet! What's their name?"
-    
-    Red: "Uh, I haven't decided yet. I'll let you know later."
-    
-    Employee: "Okay, well enjoy your new furry friend!"
-    
-    (Red and Blue leave the pet store and head to the nearest motel.)
-    ```
-    </details>
-
-
-3. Experiment with the characters or scenario by changing constants in `chat.py` (see comments).
+3. Create new AIs to chat with by adding a YAML file with their system message.
 
 ---
 
-## Commands
+## Customization
 
-Commands begin with `!`. Everything else will be interpreted as conversation.
+Add new AIs by adding YAML files to the `conversations` folder. As an example lets make a new bot, `emoji.yaml`
 
-`<!debug|!d>`: Toggle debug mode on or off.
+```yaml 
+- role: system
+  content: You are a helpful assistant that uses lots of emojis.
+```
 
-`<!print|!p>`: Print the messages object.
+Add a description in `bots.yaml` to enable automatic context switching based on the user's input. This allows you to automatically chat with the most relevant bot for your task/question.
 
-`<!history|!h>`: Print full conversation history.
+```yaml
+# Variables: User, default bot, last bot, context switching toggle
+variables: {USER_NAME: Devin, DEFAULT: help, FILENAME: code, SWITCH: true}
+bots:
+  fact: Gives encyclopedia entries for things and ideas.
+  # ...
+  # Key is the filename for your bot. Value is the description used for context switching
+  emoji: General help. Responds when user sends emojis.
+```
 
-`<!save|!s> [filename]`: Save the messages file to JSON/YAML.
+Now, EmojiBot will automatically respond when the criteria in `bots.yaml` is met.
 
-`<!load|!l> [filename]`: Load a messages file from JSON/YAML.
-
-`<!summary|!sum> [num_tokens]`: Summarize `num_tokens` or the conversation so far.
-
-`<!translate|!t> [ai_lang] [user_lang]`: Turn Translate Mode on or off.
-
-`<!model|!m> [model]`: Changes LLM model if `model` specified. Otherwise, prints current model.
-
-`<!context|!c>`: Toggle context switch mode on or off.
-
-`<!undo|!u>`: Go back one step in the conversation.
-
-`<!restart|!r>`: Delete all messages except system message and restart conversation.
-
-`<!exit|!x>`: Exit program.
+![EmojiBot](image/emoji.gif)
 
 ---
 
 ## Cost
 
-Costs increase linearly on the length of the conversation. Previous messages are included for the character's memory. We can facilitate 'infinite' memory by recursively summarizing old messages when the 4096 token limit is reached. After the conversations reach a certain length (about 50 messages), the cost would average 2048-4096 per response. The memory could be further limited to reduce costs.
-
----
-
-## Todo
-
-- [x] Dynamically summarize old messages
-
-    - [ ] Tests for correctness and improvement in memory
-
-- [x] GPT-4
-
-    - [ ] Comparisons with other versions
-
-- [ ] Conversation end conditions
-
-- [ ] Group conversations
+Costs increase linearly on the length of the conversation. Previous messages are included for the character's memory. We can facilitate 'infinite' memory by recursively summarizing old messages when the token limit is reached. After the conversations reach a certain length (about 50 messages at max memory), the cost would average 2048-4096 tokens per response. The memory can be limited to reduce costs.
 
 ---
 

@@ -5,6 +5,7 @@ from conversation import *
 @pytest.mark.parametrize('filename,ai_name,model', [
     ('tests/test1', 'CodeBot', 'gpt-3.5-turbo'),
     ('tests/test2', 'Red', 'gpt-4'),
+    ('tests/test3', 'ChefBot', 'gpt-4'),
 ])
 def test_conversation(filename, ai_name, model):
     chat = Conversation(filename=filename)
@@ -25,4 +26,4 @@ def test_conversation(filename, ai_name, model):
     assert yaml.history == json.history
 
 if __name__ == '__main__':
-    pytest.main(['tests/test_conversation.py'])
+    pytest.main([__file__])

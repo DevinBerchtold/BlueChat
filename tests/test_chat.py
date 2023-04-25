@@ -34,4 +34,4 @@ def test_filename_vars(input, filename, date, number):
     assert n == number
 
 if __name__ == '__main__':
-    pytest.main(['tests/test_chat.py'])
+    pytest.main([__file__])

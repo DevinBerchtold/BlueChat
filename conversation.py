@@ -25,6 +25,7 @@ MODEL_COST = {
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
 STREAM = True
+API_TRIES = 3
 
 UNSAVED_VARIABLES = ['messages', 'history', 'summarized', 'translate', 'user_lang', 'ai_lang']
 
@@ -64,7 +65,8 @@ def chunks_from_response(response):
         yield chunk['choices'][0]['delta'].get('content', '')
 
 def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
-    for _ in range(5):
+    success = False
+    for _ in range(API_TRIES): # 1, 2, ..., n
         try:
             response = openai.ChatCompletion.create(
                 model=model,
@@ -74,27 +76,32 @@ def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None
                 user=USER_ID,
                 stream=(STREAM and print_result)
             )
-            full_string = ''
             if STREAM and print_result:
-                full_string = print_stream(chunks_from_response(response))
+                for p in print_stream(chunks_from_response(response)):
+                    yield p
+                success = True
+                break
             else:
                 full_string = response['choices'][0]['message']['content']
+                yield full_string
                 if print_result:
                     console.print('\n'+full_string)
-
-            return full_string
-
+                success = True
+                break
         except Exception as e:
-            console.print(f"Error: {e}\nTrying again in 1 second...\n")
+            console.print(f"Error: {e}\nTrying again in {1} second...\n")
             time.sleep(1)
-    raise ConnectionError("Failed to access OpenAI API after 5 attempts.")
+    if not success:
+        raise ConnectionError("Failed to access OpenAI API after {API_TRIES} attempts.")
 
 def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODEL):
     complete_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_request }
     ]
-    answer = chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result, model=model)
+    answer = ''
+    for p in chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result, model=model):
+        answer += p
     return answer
 
 def get_response(request):
@@ -131,7 +138,7 @@ class Conversation:
 
         self.reset(filename=filename, system=system)
 
-    def reset(self, filename=None, system=None):
+    def reset(self, filename=None, system=None, ai=None):
         self.max_tokens = 1000
         self.token_warning = 500
         self.cost = 0
@@ -145,15 +152,27 @@ class Conversation:
         self.user_lang = 'English'
         self.ai_lang = 'Chinese'
 
+        if ai:
+            self.ai_name = ai
+
         if system:
             self.messages = [{"role": "system", "content": system}]
             self.history = []
         elif filename:
-            if not self.load(filename, output=True):
+            if not self.load(filename):
                 console.print("Error: Couldn't load file on reset()")
+
+    def print_vars(self):
+        strings = [f'{k}={v}' for k, v in vars(self).items() if k not in UNSAVED_VARIABLES]
+        console.print(', '.join(strings))
     
-    def input(self):
-        return console.input(self.user_prefix())
+    def input(self, prefix=True):
+        if prefix:
+            i = console.input(self.user_prefix())
+        else:
+            i = console.input()
+        console.print('')
+        return i
     
     def num_tokens(self, messages=None):
         if messages == None:
@@ -163,21 +182,21 @@ class Conversation:
     def user_prefix(self, n=None):
         if not n:
             n = len(self.history)+1
-        return f'\n[user_label]{n} {self.user_name}:[/] '
+        return f'[user_label]{n} {self.user_name}:[/] '
 
     def ai_prefix(self, n=None):
         if not n:
             n = len(self.history)+1
         
         model = 'GPT-4' if self.model == 'gpt-4' else 'GPT-3.5'
-        return f'\n[ai_label]{n} {self.ai_name}: [dim]{model}[/] '
+        return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{model}[/] '
     
     def message_prefix(self, message, n):
         if message['role'] == 'system':
             if n == 0:
-                return f'\n[bold]System:[/] '
+                return f'[bold]System:[/] '
             else:
-                return f'\n[bold]Summary {n}:[/] '
+                return f'[bold]Summary {n}:[/] '
         elif message['role'] == 'user':
             return self.user_prefix(n)
         elif message['role'] == 'assistant':
@@ -208,6 +227,7 @@ class Conversation:
         for n, m in enumerate(messages[first:last], start=first):
             console.print(self.message_prefix(m, n))
             print_markdown(m['content'])
+            console.print('') # blank line
 
     def complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
         if not messages:
@@ -221,23 +241,22 @@ class Conversation:
         
         if prefix:
             console.print(prefix)
-        answer = chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result)
+        answer = ''
+        for p in chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result):
+            yield p
+            answer += p
         answer_list = [{"role": "assistant", "content": answer}]
         cost = self.num_tokens() + self.num_tokens(answer_list)*2 # prompt cost + 2 x response cost
         cost *= MODEL_COST[self.model]
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
-        return answer, cost
+        yield cost
 
     def get_dialogue(self, user_input):
         t0 = time.time()
 
         if self.translate:
             user_input = get_translation(user_input, self.user_lang, self.ai_lang)
-
-        message = {"role": "user", "content": user_input}
-        self.messages.append(message)
-        self.history.append(message)
 
         total_tokens = self.num_tokens()
         # Summarize or forget if approaching token limit
@@ -252,7 +271,18 @@ class Conversation:
                 if DEBUG: console.log(f'<Forgetting: {last}>')
                 del self.messages[1]
 
-        answer, message_cost = self.complete(print_result=True, prefix=self.ai_prefix())
+        message = {"role": "user", "content": user_input}
+        self.messages.append(message)
+        self.history.append(message)
+        
+        answer = ''
+        for r in self.complete(print_result=True, prefix=self.ai_prefix()):
+            if isinstance(r, str):
+                answer += r
+                yield r
+            elif isinstance(r, float):
+                message_cost = r
+                # yield r
 
         message = { "role": "assistant", "content": answer }
         self.messages.append(message)
@@ -272,11 +302,9 @@ class Conversation:
                 cost_string += f' (+{message_cost:.2f}={self.cost:.2f})'
 
         if total_tokens > self.token_warning:
-            console.print(f'[dim]{cost_string} Consider restarting conversation[/]', justify='center')
+            console.print(f'[od.green_dim]{cost_string} [od.dim]Consider restarting conversation[/]', justify='center')
         elif MONEY:
-            console.print(f'[dim]{cost_string}[/]', justify='center')
-
-        return answer
+            console.print(f'[od.green_dim]{cost_string}[/]', justify='center')
 
     def summarize_messages(self, n=5000, delete=False):
         """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""
@@ -307,22 +335,15 @@ class Conversation:
 
         return summary, cost
 
-    def load(self, filename, output=True):
+    def load(self, filename):
 
-        data = load_file(filename, output=False)
+        data = load_file(filename)
         if not data:
             console.print(f"Error: Couldn't load file {filename}")
             return False
-        if output:
-            print_markdown('----')
-            folder, file = filename.split('/')
-            file_text = ' [dim]-[/] '.join(file.capitalize().split('_'))
-            f = f'[dim]{folder}/ [/][bold]{file_text}'
-            console.print(f, justify='center')
 
         self.messages, self.history = [], []
 
-        variables = []
         # We loaded a file, extract the data
         if isinstance(data, dict):
             for k, v in data.items():
@@ -330,21 +351,21 @@ class Conversation:
                     for x, y in v.items(): # for each variable
                         if x not in UNSAVED_VARIABLES: # Don't restore these
                             setattr(self, x, y)
-                            variables += [f'{x}: {y}']
                 elif k == 'messages':
                     self.messages = v
                 elif k == 'history':
                     self.history = v
                 elif k == 'date':
-                    variables.append(f"timestamp: {v}")
+                    pass
                 else:
                     console.print('Error: Unknown key in loaded dictionary')
         elif isinstance(data, list): # List of messages format
             self.messages = data
         else:
             console.print('Error: Unknown Data save format')
-        if DEBUG and variables:
-            console.print(' ' + ', '.join(variables))
+        
+        if DEBUG:
+            self.print_vars()
 
         self.messages[0]['content'] = self.messages[0]['content'].format(
             USER_NAME=self.user_name,
@@ -373,23 +394,15 @@ class Conversation:
                 self.summarize = True
                 self.summarized = True
 
-            # Print last messages from loaded file
-            if output:
-                self.print_messages(self.messages, 0, 0)
-                if len(self.messages) > 2:
-                    if len(self.messages) > 3: # print '...' if not all messages printed
-                        console.print('\n...', justify='center')
-                    self.print_messages(self.messages, -2)
-
         return filename
 
-    def save(self, filename, output=True):
+    def save(self, filename):
         # Class instance variables except messages and history (those are listed separate)
         variables = {k: v for k, v in vars(self).items() if k not in UNSAVED_VARIABLES}
         date = datetime.now()
         data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
 
-        save_file(data, filename, output=output)
+        save_file(data, filename)
 
         return filename
         

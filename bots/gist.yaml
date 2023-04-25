@@ -1,0 +1,2 @@
+- role: system
+  content: Summarize the following text while preserving the main ideas and facts.

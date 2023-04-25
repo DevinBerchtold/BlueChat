@@ -11,6 +11,7 @@ from rich.padding import Padding
 from rich.theme import Theme
 from rich.status import Status
 from rich.align import Align
+from rich.rule import Rule
 from pygments.styles.onedark import OneDarkStyle
 
 
@@ -34,33 +35,63 @@ JSON = False
 REFRESH = 8
 
 class InlineStyle(OneDarkStyle):
-    background_color = '#0C0C0C'
+    # background_color = '#0C0C0C'
+    background_color = '#181818'
 code_block_style = 'one-dark'
 
 # one dark colors
-od_red = '#EF596F bold'
-od_blue = '#61AFEF bold'
-od_yellow = '#E5C07B bold'
-od_green = '#89CA78 bold'
-od_cyan = '#2BBAC5 bold'
-od_orange = '#D19A66 bold'
+od_white = '#ABB2BF'
+od_red = '#EF596F'
+od_blue = '#61AFEF'
+od_yellow = '#E5C07B'
+od_green = '#89CA78'
+od_cyan = '#2BBAC5'
+od_orange = '#D19A66'
+od_dim = '#7E848E'
+od_red_dim = '#AB4859'
+od_blue_dim = '#4D82AE'
+od_yellow_dim = '#A58D61'
+od_green_dim = '#67945F'
+od_cyan_dim = '#298992'
+od_orange_dim = '#977453'
 
 theme_dict = {
-    "user_label": od_blue,
-    "ai_label": od_red,
-    "markdown.item.number": od_yellow,
-    "markdown.item.bullet": od_yellow,
+    # one dark colors
+    "od.white": od_white,
+    "od.red": od_red,
+    "od.blue": od_blue,
+    "od.yellow": od_yellow,
+    "od.green": od_green,
+    "od.cyan": od_cyan,
+    "od.orange": od_orange,
+    "od.dim": od_dim,
+    "od.red_dim": od_red_dim,
+    "od.blue_dim": od_blue_dim,
+    "od.yellow_dim": od_yellow_dim,
+    "od.green_dim": od_green_dim,
+    "od.cyan_dim": od_cyan_dim,
+    "od.orange_dim": od_orange_dim,
+    # others
+    "rule.line": od_yellow,
+    "user_label": od_blue+' bold',
+    "ai_label": od_red+' bold',
+    "markdown.item.number": od_yellow+' bold',
+    "markdown.item.bullet": od_yellow+' bold',
     "markdown.hr": od_yellow,
     "markdown.code": od_cyan,
     "markdown.link": od_cyan,
     "markdown.link_url": od_cyan,
     "repr.number": od_cyan,
-    "repr.string": od_green,
+    "repr.str": od_green,
     "repr.attrib_name": od_yellow,
     # "repr.attrib_equal": od_cyan,
     "repr.attrib_value": od_cyan,
-    "repr.bool_true": od_green,
-    "repr.bool_false": od_red,
+    "repr.bool_true": od_green+' bold',
+    "repr.bool_false": od_red+' bold',
+    "repr.ipv4": od_cyan,
+    "repr.ipv6": od_cyan,
+    "repr.eui48": od_cyan,
+    "repr.eui64": od_cyan,
 }
 
 console = Console(theme=Theme(theme_dict))
@@ -81,9 +112,10 @@ TODAY = datetime.now().strftime('%Y-%m-%d')
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
 def clear_screen():
-    if os.name == 'nt':   # For Windows
+    name = os.name
+    if name == 'nt': # For Windows
         os.system('cls')
-    elif os.name == 'posix':  # For Linux and macOS
+    elif name == 'posix': # For Linux and macOS
         os.system('clear')
 
 def status_spinner(text='Loading...'):
@@ -92,13 +124,13 @@ def status_spinner(text='Loading...'):
     speed = 500.0/(REFRESH*interval) # About 2 refreshes per frame
     return Live(
         Align(
-            Status('[dim]'+text, spinner='arc', spinner_style='markdown.hr', speed=speed),
+            Status('[od.dim]'+text, spinner='arc', spinner_style='markdown.hr', speed=speed),
             align='center'
         ),
         console=console, refresh_per_second=REFRESH, transient=True
     )
 
-def break_spaces(chunks):
+def generate_words(chunks):
     buffer = ''
     for chunk in chunks:
         for char in chunk:
@@ -114,20 +146,31 @@ def break_spaces(chunks):
     if buffer:
         yield buffer
 
-def generate_words(chunks):
+def generate_paragraphs(chunks):
     """Generates words grouped such that each is a full word. '\\n\\n' outside code blocks are grouped to signify paragraph breaks."""
     code_block = False
-    for chunk in break_spaces(chunks):
+    list_block = False
+    for chunk in generate_words(chunks):
         toggle_code_block = len(chunk) >= 3 and '```' in chunk
 
         if chunk.startswith('\n\n'):
-            if code_block or re.match(r'\n\n(-|\*|[0-9]+(.|\)))', chunk):
-                yield '\n'
-                yield '\n'
+            list_match = re.match(r'\n\n(-|\*|[0-9]+(.|\)))', chunk)
+            if not list_match:
+                list_block = False
+            
+            if code_block or list_block:
+                yield '\n' # No breaks...
+                yield '\n' # ...just new lines
+                yield chunk[2:]
+            elif list_match: # first element of a list
+                yield '\n\n' # Paragraph break
                 yield chunk[2:]
             else:
-                yield '\n\n'
+                yield '\n\n\n' # Paragraph break + new line
                 yield chunk[2:]
+
+            if list_match: # switch after action so 
+                list_block = True
         else:
             yield chunk
 
@@ -141,41 +184,47 @@ def markdown(string):
 def print_markdown(string):
     console.print(markdown(string))
 
-def print_stream(chunks):
-    full_string = ''
-    if FORMAT:
-        live = None
-        full_paragraph = ''
-        for w in generate_words(chunks):
-            full_string += w
-            full_paragraph += w
-            if not live:
-                live = Live(console=console, refresh_per_second=REFRESH, transient=True)
-                live.start()
+def print_rule(string):
+    console.print(Padding(Rule(string), (0, 1)))
 
-            if w == '\n\n': # new paragraph
+def print_stream(chunks):
+    if FORMAT:
+        live = Live(console=console, refresh_per_second=REFRESH, transient=True)
+        live.start()
+        full_paragraph = ''
+        for w in generate_paragraphs(chunks):
+            if w in ['\n\n', '\n\n\n']: # new paragraph
+                full_paragraph += '\n\n'
+
                 live.stop()
                 print_markdown(full_paragraph)
+                yield full_paragraph
 
-                # console.print('[dim]- - - -[/]', justify='center')
-                console.print('')
+                if w == '\n\n\n': # Paragraph break plus new line
+                    # console.print('[od.dim]- - -[/]', justify='center')
+                    console.print('')
+                elif w == '\n\n': # This signals that we don't need the new line
+                    # console.print('[od.red]_ _ _[/]', justify='center')
+                    pass
 
                 full_paragraph = ''
                 live = Live(console=console, refresh_per_second=REFRESH, transient=True)
                 live.start()
-                
-            else:
-                if not w.isspace():
+            else: # add to paragraph
+                full_paragraph += w
+                if not w.isspace(): # update if visible characters
                     live.update(markdown(full_paragraph))
         live.stop()
         print_markdown(full_paragraph)
+        if full_paragraph:
+            yield full_paragraph
     else:
+        full_string = ''
         for c in chunks:
             sys.stdout.write(c)
             full_string += c
         sys.stdout.flush()
-
-    return full_string
+        yield full_string
 
 if YAML: # Only define YAML functions if needed
     def str_presenter(dumper, data): # Change style to | if multiple lines
@@ -191,7 +240,7 @@ if YAML: # Only define YAML functions if needed
     yaml.representer.SafeRepresenter.add_representer(str, str_presenter)
     yaml.representer.SafeRepresenter.add_representer(dict, dict_presenter)
 
-def load_file(filename, output=False):
+def load_file(filename):
     if '.' in filename: # if filetype specified
         filename, filetype = filename.split('.')
     else:
@@ -206,18 +255,18 @@ def load_file(filename, output=False):
             return False
     
     if filetype == 'json':
-        if output: print(f"Loading {filename}.json")
+        if DEBUG: console.log(f"Loading {filename}.json")
         with open(f'{filename}.json', encoding='utf8') as f:
-            data = json.load(f)
-            return data
+            return json.load(f)
+        
     elif filetype == 'yaml':
-        if output: print(f"Loading {filename}.yaml")
+        if DEBUG: console.log(f"Loading {filename}.yaml")
         with open(f'{filename}.yaml', 'r', encoding='utf8') as f:
-            data = yaml.safe_load(f)
-            return data
+            return yaml.safe_load(f)
+        
     return False
 
-def save_file(data, filename, output=False):
+def save_file(data, filename):
     if '/' in filename: # make folder if it's not there
         folder, filename = filename.split('/')
         if not os.path.exists(folder):
@@ -232,17 +281,13 @@ def save_file(data, filename, output=False):
         file = f'{folder}/{filename}.yaml'
         with open(file, 'w', encoding='utf8') as f:
             yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=float("inf"))
-        if output:
-            console.print("Data saved to "+file)
-        elif DEBUG:
+        if DEBUG:
             console.log("Data saved to "+file)
             
     if filetype == 'json' or (JSON and filetype is None):
         file = f'{folder}/{filename}.json'
         with open(file, 'w', encoding='utf8') as f:
             json.dump(data, f, indent='\t', ensure_ascii=False, default=str)
-        if output:
-            console.print("Data saved to "+file)
-        elif DEBUG:
+        if DEBUG:
             console.log("Data saved to "+file)
             

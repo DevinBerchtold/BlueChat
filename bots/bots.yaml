@@ -1,4 +1,4 @@
-variables: {USER_NAME: Devin, DEFAULT: help, FILENAME: creative, SWITCH: true}
+variables: {FILENAME: help, SWITCH: true}
 bots:
   fact: Gives encyclopedia entries for things and ideas.
   dictionary: Gives definitions for words and slang.

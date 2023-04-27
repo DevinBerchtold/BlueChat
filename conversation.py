@@ -163,8 +163,8 @@ class Conversation:
                 console.print("Error: Couldn't load file on reset()")
 
     def print_vars(self):
-        strings = [f'{k}={v}' for k, v in vars(self).items() if k not in UNSAVED_VARIABLES]
-        console.print(', '.join(strings))
+        variables = {k: v for k, v in vars(self).items() if k not in UNSAVED_VARIABLES}
+        console.print(variables)
     
     def input(self, prefix=True):
         if prefix:
@@ -180,27 +180,27 @@ class Conversation:
         return num_tokens_from_messages(messages, self.model)
 
     def user_prefix(self, n=None):
-        if not n:
+        if n is None:
             n = len(self.history)+1
         return f'[user_label]{n} {self.user_name}:[/] '
 
     def ai_prefix(self, n=None):
-        if not n:
+        if n is None:
             n = len(self.history)+1
         
         model = 'GPT-4' if self.model == 'gpt-4' else 'GPT-3.5'
         return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{model}[/] '
     
     def message_prefix(self, message, n):
-        if message['role'] == 'system':
-            if n == 0:
+        match message['role']:
+            case 'system' if n == 0:
                 return f'[bold]System:[/] '
-            else:
+            case 'system':
                 return f'[bold]Summary {n}:[/] '
-        elif message['role'] == 'user':
-            return self.user_prefix(n)
-        elif message['role'] == 'assistant':
-            return self.ai_prefix(n)
+            case 'user':
+                return self.user_prefix(n)
+            case 'assistant':
+                return self.ai_prefix(n)
 
     def messages_string(self, messages, divider=' '):
         strings = []
@@ -282,7 +282,6 @@ class Conversation:
                 yield r
             elif isinstance(r, float):
                 message_cost = r
-                # yield r
 
         message = { "role": "assistant", "content": answer }
         self.messages.append(message)
@@ -312,17 +311,20 @@ class Conversation:
         if self.num_tokens() > n:
             while self.num_tokens(self.messages[:i]) < n:
                 i += 1
-            string = self.messages_string(self.messages[1:i])
-            if delete:
-                del self.messages[1:i]
         else:
-            string = self.messages_string(self.messages[1:])
-            if delete:
-                del self.messages[1:]
+            i = None
+        string = self.messages_string(self.messages[1:i])
+        if delete:
+            del self.messages[1:i]
 
         if DEBUG: console.log(f'Summarizing: {string}')
 
-        summary, cost = self.complete(system='Summarize this conversation', user=string)
+        summary = ''
+        for r in self.complete(system='Summarize this conversation', user=string):
+            if isinstance(r, str):
+                summary += r
+            elif isinstance(r, float):
+                cost = r
 
         if DEBUG: console.log(f'Summary (+{cost:.2f}={self.cost:.2f}): {summary}')
 
@@ -377,13 +379,10 @@ class Conversation:
             self.history = [m for m in self.messages if m['role'] != 'system']
 
         else: # We have history. Connect to messages so they are in sync
-            n = 1 # Count the number of identical messages
-            while n < len(self.history):
+            n = 1 # While messages are identical...
+            while n < len(self.history) and self.history[-n] == self.messages[-n]:
+                self.history[-n] = self.messages[-n] # ...reassign so they are the same object
                 n += 1
-                if self.history[-n] != self.messages[-n]:
-                    n -= 1
-                    break
-            self.history[-n:] = self.messages[-n:] # Reassign so they are the same object        
 
         if self.messages[-1]['role'] == 'user': # If last response is user...
             self.messages.pop() # Remove it so user can respond

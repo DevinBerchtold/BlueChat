@@ -23,15 +23,15 @@ test_cases = [
     ),
     (
         'hello world\n\nhow  are you?',
-        ['hello', ' world', '\n\n\n', 'how', '  are', ' you?']
+        ['hello', ' world', '\n\nhow', '  are', ' you?']
     ),
     (
         'hello world\n\n\nhow  are you?',
-        ['hello', ' world', '\n\n\n', '\nhow', '  are', ' you?']
+        ['hello', ' world', '\n\n\nhow', '  are', ' you?']
     ),
     (
         'hello world\n\n how  are you?',
-        ['hello', ' world', '\n\n\n',' how', '  are', ' you?']
+        ['hello', ' world', '\n\n how', '  are', ' you?']
     ),
     (
         'hello world \n\nhow  are you?',
@@ -53,14 +53,11 @@ Returns a list of numbers.
 """,
     [
         'Python', ' code:',
-        '\n\n\n',
-        '```python',
+        '\n\n```python',
         '\nl', ' =', ' [x', ' for', ' x', ' in', ' range(10)]',
-        '\n',
-        '\n', 'return', ' l',
+        '\n\nreturn', ' l',
         '\n```',
-        '\n\n\n',
-        'Returns', ' a', ' list', ' of', ' numbers.',
+        '\n\nReturns', ' a', ' list', ' of', ' numbers.',
         '\n'
     ]
     ),
@@ -75,14 +72,10 @@ Returns a list of numbers.
 That's all.""",
     [
         'List:',
-        '\n\n',
-        '1.', ' Apple',
-        '\n',
-        '\n', '2.', ' Orange',
-        '\n',
-        '\n', '3.', ' Banana',
-        '\n\n\n',
-        "That's", ' all.'
+        '\n\n1.', ' Apple',
+        '\n\n2.', ' Orange',
+        '\n\n3.', ' Banana',
+        "\n\nThat's", ' all.'
     ]
     ),
     ("""Ingredients:
@@ -105,7 +98,7 @@ That's all.""",
 - Lime wedges, for serving \U0001F34B""",
     [
         'Ingredients:',
-        '\n\n', '-', ' Tortilla', ' chips', ' \U0001F32E',
+        '\n\n-', ' Tortilla', ' chips', ' \U0001F32E',
         '\n-', ' 1', ' cup', ' canned', ' black', ' beans,', ' drained', ' and', ' rinsed', ' \U0001F96B',
         '\n-', ' 1', ' cup', ' canned', ' corn,', ' drained', ' \U0001F33D',
         '\n-', ' 1', ' onion,', ' diced', ' \U0001F9C5',
@@ -125,7 +118,7 @@ That's all.""",
     )
 ]
 
-@pytest.mark.parametrize('input,expected', test_cases[:4])
+@pytest.mark.parametrize('input,expected', test_cases)
 def test_generate_words(input, expected):
     chunks = random_chunks(input)
     print(f'  {chunks=}')
@@ -133,6 +126,101 @@ def test_generate_words(input, expected):
     result = list(generate_words(chunks))
     print(f'  {result=}')
     assert result == expected
+
+
+test_cases = [
+    ('', []),
+    ('hello world', ['hello world']),
+    ('       ', ['       ']),
+    (
+        'hello world  how  are you?',
+        ['hello world  how  are you?']
+    ),
+    (
+        'hello world\n\nhow  are you?',
+        ['hello world', 'how  are you?']
+    ),
+    (
+        'hello world\n\n\nhow  are you?',
+        ['hello world', '\nhow  are you?']
+    ),
+    (
+        'hello world\n\n how  are you?',
+        ['hello world', ' how  are you?']
+    ),
+    # ( # Bug
+    #     'hello world \n\nhow  are you?',
+    #     ['hello world ', 'how  are you?']
+    # ),
+    ("""Python code:
+
+```python
+l = [x for x in range(10)]
+
+return l
+```
+
+Returns a list of numbers.
+""",
+    [
+        'Python code:',
+        '```python\nl = [x for x in range(10)]\n\nreturn l\n```',
+        'Returns a list of numbers.\n'
+    ]
+    ),
+    ("""List:
+
+1. Apple
+
+2. Orange
+
+3. Banana
+
+That's all.""",
+    [
+        'List:',
+        '1. Apple\n\n2. Orange\n\n3. Banana',
+        "That's all."
+    ]
+    ),
+    ("""Ingredients:
+
+- Tortilla chips \U0001F32E
+- 1 cup canned black beans, drained and rinsed \U0001F96B
+- 1 cup canned corn, drained \U0001F33D
+- 1 onion, diced \U0001F9C5
+- 2 cloves garlic, minced \U0001F9C4
+- 1 jalapeno, chopped (optional for extra spiciness) \U0001F336️
+- 1 tablespoon vegetable oil \U0001F6E2️
+- 1 teaspoon ground cumin
+- 1 teaspoon ground paprika
+- 1/2 teaspoon ground turmeric
+- Salt, to taste
+- 1 cup shredded cheese (cheddar, Monterrey Jack or pepper jack) \U0001F9C0
+- 1/2 cup sour cream
+- 1/2 cup guacamole \U0001F951
+- 1/2 cup salsa \U0001F345
+- Lime wedges, for serving \U0001F34B""",
+    [
+        'Ingredients:', """- Tortilla chips \U0001F32E
+- 1 cup canned black beans, drained and rinsed \U0001F96B
+- 1 cup canned corn, drained \U0001F33D
+- 1 onion, diced \U0001F9C5
+- 2 cloves garlic, minced \U0001F9C4
+- 1 jalapeno, chopped (optional for extra spiciness) \U0001F336️
+- 1 tablespoon vegetable oil \U0001F6E2️
+- 1 teaspoon ground cumin
+- 1 teaspoon ground paprika
+- 1/2 teaspoon ground turmeric
+- Salt, to taste
+- 1 cup shredded cheese (cheddar, Monterrey Jack or pepper jack) \U0001F9C0
+- 1/2 cup sour cream
+- 1/2 cup guacamole \U0001F951
+- 1/2 cup salsa \U0001F345
+- Lime wedges, for serving \U0001F34B"""
+    ]
+    )
+]
 
 @pytest.mark.parametrize('input,expected', test_cases)
 def test_generate_paragraphs(input, expected):

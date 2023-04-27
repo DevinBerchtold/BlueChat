@@ -3,3 +3,5 @@
 /.vscode
 /backup
 /chats
+/tests/*_out.json
+/tests/*_out.yaml

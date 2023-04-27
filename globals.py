@@ -131,13 +131,14 @@ def status_spinner(text='Loading...'):
     )
 
 def generate_words(chunks):
+    """Generates words where each element starts with whitespace and ends with a word"""
     buffer = ''
     for chunk in chunks:
         for char in chunk:
             if char.isspace():
                 if buffer.isspace():
                     buffer += char
-                else: # Buffer has data and we're begging new chunk
+                else: # Buffer has data and we're begining new chunk
                     if buffer:
                         yield buffer
                     buffer = char
@@ -147,35 +148,39 @@ def generate_words(chunks):
         yield buffer
 
 def generate_paragraphs(chunks):
-    """Generates words grouped such that each is a full word. '\\n\\n' outside code blocks are grouped to signify paragraph breaks."""
+    """Print and yield complete paragraphs, one by one. Keep code blocks and lists as one paragraph"""
     code_block = False
     list_block = False
+    live = Live(console=console, refresh_per_second=REFRESH)
+    live.start()
+    buffer = ''
     for chunk in generate_words(chunks):
-        toggle_code_block = len(chunk) >= 3 and '```' in chunk
-
         if chunk.startswith('\n\n'):
             list_match = re.match(r'\n\n(-|\*|[0-9]+(.|\)))', chunk)
-            if not list_match:
-                list_block = False
-            
-            if code_block or list_block:
-                yield '\n' # No breaks...
-                yield '\n' # ...just new lines
-                yield chunk[2:]
-            elif list_match: # first element of a list
-                yield '\n\n' # Paragraph break
-                yield chunk[2:]
-            else:
-                yield '\n\n\n' # Paragraph break + new line
-                yield chunk[2:]
-
-            if list_match: # switch after action so 
-                list_block = True
+            if code_block or (list_block and list_match):
+                buffer += chunk
+            else: 
+                live.stop()
+                yield buffer
+                buffer = chunk[2:]
+                if list_match: # first element of a list (list_match = True, list_block = False)
+                    # console.print('[od.dim]_ _ _[/]', justify='center')
+                    pass
+                else: # (list_match = False, list_block = ?)
+                    # console.print('[od.dim]- - -[/]', justify='center')
+                    console.print('')
+                live = Live(console=console, refresh_per_second=REFRESH)
+                live.start()
+            list_block = list_match
         else:
-            yield chunk
-
-        if toggle_code_block:
+            buffer += chunk
+        if len(chunk) >= 3 and '```' in chunk:
             code_block = not code_block
+        if not chunk.isspace(): # update if visible characters
+                live.update(markdown(buffer))
+    live.stop()
+    if buffer:
+        yield buffer
 
 def markdown(string):
     markdown = Markdown(string, code_theme=code_block_style, inline_code_lexer='python', inline_code_theme=InlineStyle)
@@ -189,41 +194,17 @@ def print_rule(string):
 
 def print_stream(chunks):
     if FORMAT:
-        live = Live(console=console, refresh_per_second=REFRESH, transient=True)
-        live.start()
-        full_paragraph = ''
-        for w in generate_paragraphs(chunks):
-            if w in ['\n\n', '\n\n\n']: # new paragraph
-                full_paragraph += '\n\n'
-
-                live.stop()
-                print_markdown(full_paragraph)
-                yield full_paragraph
-
-                if w == '\n\n\n': # Paragraph break plus new line
-                    # console.print('[od.dim]- - -[/]', justify='center')
-                    console.print('')
-                elif w == '\n\n': # This signals that we don't need the new line
-                    # console.print('[od.red]_ _ _[/]', justify='center')
-                    pass
-
-                full_paragraph = ''
-                live = Live(console=console, refresh_per_second=REFRESH, transient=True)
-                live.start()
-            else: # add to paragraph
-                full_paragraph += w
-                if not w.isspace(): # update if visible characters
-                    live.update(markdown(full_paragraph))
-        live.stop()
-        print_markdown(full_paragraph)
-        if full_paragraph:
-            yield full_paragraph
+        for i, p in enumerate(generate_paragraphs(chunks)):
+            if i == 0:
+                yield p
+            else:
+                yield '\n\n'+p
     else:
         full_string = ''
         for c in chunks:
             sys.stdout.write(c)
+            sys.stdout.flush()
             full_string += c
-        sys.stdout.flush()
         yield full_string
 
 if YAML: # Only define YAML functions if needed

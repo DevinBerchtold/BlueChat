@@ -164,9 +164,9 @@ def screen_reset():
     chat.print_messages(chat.messages, PRINT_START, None)
     if PARAGRAPHS is not None:
         console.print(chat.ai_prefix())
-        if PARAGRAPHS is not []:
-            print_markdown('\n\n'.join(PARAGRAPHS))
-        console.print('')
+        if PARAGRAPHS != '':
+            print_markdown(PARAGRAPHS)
+            console.print('')
     else:
         console.print('\r'+chat.user_prefix(), end='')
 
@@ -240,7 +240,7 @@ if __name__ == '__main__':
             elif command in ['restart', 'r']: # Restart chat
                 console.print('Restarting conversation')
                 chat.reset(f'{BOT_FOLDER}/{FILENAME}')
-                FILENAME, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
+                _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
                 FILENUM += 1
 
             elif command in ['redo', 'undo', 'u']: # Undo messages
@@ -347,9 +347,9 @@ if __name__ == '__main__':
 
             FIRST_MESSAGE = False
 
-            PARAGRAPHS = []
+            PARAGRAPHS = ''
             for p in chat.get_dialogue(user_input):
-                PARAGRAPHS.append(p)
+                PARAGRAPHS += p
             PARAGRAPHS = None
 
             if AUTOSAVE:

@@ -1,6 +1,6 @@
 import pytest
 import conftest
-from globals import *
+from console import *
 import random
 
 def random_chunks(input_string):

@@ -1,12 +1,12 @@
 import sys
+import threading
+import time
 import re
 
 import pyperclip
 
 from globals import *
 import conversation
-import threading
-import time
 
 
 
@@ -29,8 +29,6 @@ CONFIG = f'{BOT_FOLDER}/{CONFIG_FILE}'
 AUTOSAVE = True
 AUTOLOAD = True
 FILENUM = 1
-
-TODAY = datetime.now().strftime('%Y-%m-%d')
 DATE = TODAY
 
 AI_NAME = 'DefaultAI'
@@ -77,20 +75,6 @@ def filename_vars(filename):
         case [f]:
             return f, DATE, 0
 
-def print_filename(filename=None):
-    if filename is None:
-        filename = f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}'
-
-    folder, file = filename.split('/')
-    match file.capitalize().split('_'):
-        case [f, d, n]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}[/] [od.dim]-[/] [od.white]{d}[/] [od.dim]-[/] [bold]{n}'
-        case [f, n]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}[/] [od.dim]-[/] [bold]{n}'
-        case [f]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}'
-    print_rule(s)
-
 def filename_num(filename):
     return filename_vars(filename)[2] # Last element
 
@@ -116,7 +100,7 @@ def load_latest(string, reset=False):
         chat.reset(file, ai=string.capitalize()+'Bot')
     else:
         chat.load(file)
-    print_filename(file)
+    console.print_filename(file)
 
     if len(chat.messages) > 1:
         PRINT_START = len(chat.messages)-2
@@ -156,16 +140,23 @@ def switch_context(user_input):
 
     return False
 
+def clear_screen():
+    name = os.name
+    if name == 'nt': # For Windows
+        os.system('cls')
+    elif name == 'posix': # For Linux and macOS
+        os.system('clear')
+
 def screen_reset():
     global RESETS
     RESETS += 1
     clear_screen()
-    print_filename()
+    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
     chat.print_messages(chat.messages, PRINT_START, None)
     if PARAGRAPHS is not None:
         console.print(chat.ai_prefix())
         if PARAGRAPHS != '':
-            print_markdown(PARAGRAPHS)
+            console.print_markdown(PARAGRAPHS)
             console.print('')
     else:
         console.print('\r'+chat.user_prefix(), end='')
@@ -195,7 +186,7 @@ def watch_window_size():
 ##     ## ##     ## #### ##    ##
 
 if __name__ == '__main__':
-    print_rule('[bold]BlueChat')
+    console.print_rule('[bold]BlueChat')
     # console.print('[bold]Chatbots:[/] '+', '.join([s.capitalize() for s in ALL_BOTS]) )
 
     if len(sys.argv) == 2: # If there's an argument...
@@ -212,8 +203,9 @@ if __name__ == '__main__':
     else: # Setup a new conversation
         chat = conversation.Conversation(user=USER_NAME, ai=AI_NAME)
 
-    window_size_thread = threading.Thread(target=watch_window_size, daemon=True)
-    window_size_thread.start()
+    if console.RICH:
+        window_size_thread = threading.Thread(target=watch_window_size, daemon=True)
+        window_size_thread.start()
 
     last_input_reset = False
     while True:
@@ -271,9 +263,15 @@ if __name__ == '__main__':
                     chat.save(create_filename())
 
             elif command in ['load', 'l']: # Load chat from file
-                FIRST_MESSAGE = False # If we just loaded, we don't want to switch context right away
+                FIRST_MESSAGE = False # Just loaded, don't switch context right away
                 if parm:
-                    load_latest(parm)
+                    if '_' in parm:
+                        if '/' in parm:
+                            chat.load(parm)
+                        else:
+                            chat.load(f'{CHAT_FOLDER}/{parm}')
+                    else:
+                        load_latest(parm)
                 else:
                     console.print('Error: No filename specified')
 
@@ -315,22 +313,49 @@ if __name__ == '__main__':
                         FIRST_MESSAGE = True
                     console.print(f'Auto-switch={SWITCH}')
 
-            elif command in ['variables', 'vars', 'v']: # Print variables
-                console.print({k: v for k, v in globals().items() if k.isupper()})
-                chat.print_vars()
+            elif command in ['variable', 'var', 'variables', 'vars', 'v']: # Set or print variables
+                if parm:
+                    var, string = parm.split('=')
+                    try: value = int(string)
+                    except ValueError:
+                        try: value = float(string)
+                        except ValueError:
+                            if string == 'True': value = True
+                            elif string == 'False': value = False
+                            else: value = string
+
+                    if var.isupper() and var in globals():
+                        globals()[var] = value
+                        console.print(f'global {var}={value}')
+                    elif var.islower() and hasattr(chat, var):
+                        setattr(chat, var, value)
+                        console.print(f'chat.{var}={value}')
+                    else:
+                        console.print('Unrecognized variable')
+                else:
+                    console.print({k: v for k, v in globals().items() if k.isupper()})
+                    chat.print_vars()
 
             elif command in ['copy', 'c']: # Copy chat messages to clipboard
+                n = None
                 if parm:
                     if parm == 'all':
                         n = len(chat.messages)
+                    elif parm == 'code':
+                        text = chat.messages[-1]['content']
+                        pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
+                        matches = re.findall(pattern, text)
+                        pyperclip.copy('\n\n'.join(matches))
+                        console.print(f'Copied {len(matches)} code blocks to clipboard\n')
                     else:
                         n = int(parm)
                 else:
                     n = 2
-                pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
-                console.print(f'Copied {n} messages to clipboard\n')
+                if n:
+                    pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
+                    console.print(f'Copied {n} messages to clipboard\n')
 
-            elif command in ['paste', 'p', 'v']: # Paste clipboard to a message
+            elif command in ['paste', 'p']: # Paste clipboard to a message
                 user_input = pyperclip.paste()
                 console.print(user_input)
 
@@ -340,7 +365,7 @@ if __name__ == '__main__':
 
         if user_input and not user_input.startswith('!'): # !p and !a can change user_input
             if SWITCH and FIRST_MESSAGE:
-                with status_spinner('Checking context...'):
+                with console.status('Checking context...'):
                     switch = switch_context(user_input)
                     if switch and switch != FILENAME:
                         load_latest(switch, reset=True)

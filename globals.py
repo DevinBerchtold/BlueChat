@@ -1,18 +1,8 @@
-import sys
 import os
 import json
 from datetime import datetime
-import re
 
-from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.padding import Padding
-from rich.theme import Theme
-from rich.status import Status
-from rich.align import Align
-from rich.rule import Rule
-from pygments.styles.onedark import OneDarkStyle
+import console
 
 
 
@@ -32,72 +22,6 @@ if YAML:
     import yaml
 JSON = False
 
-REFRESH = 8
-
-class InlineStyle(OneDarkStyle):
-    # background_color = '#0C0C0C'
-    background_color = '#181818'
-code_block_style = 'one-dark'
-
-# one dark colors
-od_white = '#ABB2BF'
-od_red = '#EF596F'
-od_blue = '#61AFEF'
-od_yellow = '#E5C07B'
-od_green = '#89CA78'
-od_cyan = '#2BBAC5'
-od_orange = '#D19A66'
-od_dim = '#7E848E'
-od_red_dim = '#AB4859'
-od_blue_dim = '#4D82AE'
-od_yellow_dim = '#A58D61'
-od_green_dim = '#67945F'
-od_cyan_dim = '#298992'
-od_orange_dim = '#977453'
-
-theme_dict = {
-    # one dark colors
-    "od.white": od_white,
-    "od.red": od_red,
-    "od.blue": od_blue,
-    "od.yellow": od_yellow,
-    "od.green": od_green,
-    "od.cyan": od_cyan,
-    "od.orange": od_orange,
-    "od.dim": od_dim,
-    "od.red_dim": od_red_dim,
-    "od.blue_dim": od_blue_dim,
-    "od.yellow_dim": od_yellow_dim,
-    "od.green_dim": od_green_dim,
-    "od.cyan_dim": od_cyan_dim,
-    "od.orange_dim": od_orange_dim,
-    # others
-    "rule.line": od_yellow,
-    "user_label": od_blue+' bold',
-    "ai_label": od_red+' bold',
-    "markdown.item.number": od_yellow+' bold',
-    "markdown.item.bullet": od_yellow+' bold',
-    "markdown.hr": od_yellow,
-    "markdown.code": od_cyan,
-    "markdown.link": od_cyan,
-    "markdown.link_url": od_cyan,
-    "repr.number": od_cyan,
-    "repr.str": od_green,
-    "repr.attrib_name": od_yellow,
-    # "repr.attrib_equal": od_cyan,
-    "repr.attrib_value": od_cyan,
-    "repr.bool_true": od_green+' bold',
-    "repr.bool_false": od_red+' bold',
-    "repr.ipv4": od_cyan,
-    "repr.ipv6": od_cyan,
-    "repr.eui48": od_cyan,
-    "repr.eui64": od_cyan,
-}
-
-console = Console(theme=Theme(theme_dict))
-
-FORMAT = True
-
 TODAY = datetime.now().strftime('%Y-%m-%d')
 
 
@@ -110,102 +34,6 @@ TODAY = datetime.now().strftime('%Y-%m-%d')
 ##       ##     ## ##  #### ##          ##     ##  ##     ## ##  ####       ##
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
-
-def clear_screen():
-    name = os.name
-    if name == 'nt': # For Windows
-        os.system('cls')
-    elif name == 'posix': # For Linux and macOS
-        os.system('clear')
-
-def status_spinner(text='Loading...'):
-    interval = 100.0 # interval = 100.0 for 'arc', 80.0 for 'dots'
-    # 1000.0/refresh = interval*speed
-    speed = 500.0/(REFRESH*interval) # About 2 refreshes per frame
-    return Live(
-        Align(
-            Status('[od.dim]'+text, spinner='arc', spinner_style='markdown.hr', speed=speed),
-            align='center'
-        ),
-        console=console, refresh_per_second=REFRESH, transient=True
-    )
-
-def generate_words(chunks):
-    """Generates words where each element starts with whitespace and ends with a word"""
-    buffer = ''
-    for chunk in chunks:
-        for char in chunk:
-            if char.isspace():
-                if buffer.isspace():
-                    buffer += char
-                else: # Buffer has data and we're begining new chunk
-                    if buffer:
-                        yield buffer
-                    buffer = char
-            else:
-                buffer += char
-    if buffer:
-        yield buffer
-
-def generate_paragraphs(chunks):
-    """Print and yield complete paragraphs, one by one. Keep code blocks and lists as one paragraph"""
-    code_block = False
-    list_block = False
-    live = Live(console=console, refresh_per_second=REFRESH)
-    live.start()
-    buffer = ''
-    for chunk in generate_words(chunks):
-        if chunk.startswith('\n\n'):
-            list_match = re.match(r'\n\n(-|\*|[0-9]+(.|\)))', chunk)
-            if code_block or (list_block and list_match):
-                buffer += chunk
-            else: 
-                live.stop()
-                yield buffer
-                buffer = chunk[2:]
-                if list_match: # first element of a list (list_match = True, list_block = False)
-                    # console.print('[od.dim]_ _ _[/]', justify='center')
-                    pass
-                else: # (list_match = False, list_block = ?)
-                    # console.print('[od.dim]- - -[/]', justify='center')
-                    console.print('')
-                live = Live(console=console, refresh_per_second=REFRESH)
-                live.start()
-            list_block = list_match
-        else:
-            buffer += chunk
-        if len(chunk) >= 3 and '```' in chunk:
-            code_block = not code_block
-        if not chunk.isspace(): # update if visible characters
-                live.update(markdown(buffer))
-    live.stop()
-    if buffer:
-        yield buffer
-
-def markdown(string):
-    markdown = Markdown(string, code_theme=code_block_style, inline_code_lexer='python', inline_code_theme=InlineStyle)
-    return Padding(markdown, (0, 1))
-
-def print_markdown(string):
-    console.print(markdown(string))
-
-def print_rule(string):
-    console.print(Padding(Rule(string), (0, 1)))
-
-def print_stream(chunks):
-    if FORMAT:
-        for i, p in enumerate(generate_paragraphs(chunks)):
-            if i == 0:
-                yield p
-            else:
-                yield '\n\n'+p
-    else:
-        full_string = ''
-        for c in chunks:
-            sys.stdout.write(c)
-            sys.stdout.flush()
-            full_string += c
-        yield full_string
 
 if YAML: # Only define YAML functions if needed
     def str_presenter(dumper, data): # Change style to | if multiple lines

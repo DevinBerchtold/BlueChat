@@ -1,5 +1,4 @@
 import time
-from datetime import datetime
 
 import openai
 import tiktoken
@@ -77,7 +76,7 @@ def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None
                 stream=(STREAM and print_result)
             )
             if STREAM and print_result:
-                for p in print_stream(chunks_from_response(response)):
+                for p in console.print_stream(chunks_from_response(response)):
                     yield p
                 success = True
                 break
@@ -226,7 +225,7 @@ class Conversation:
         if last == first: last += 1 #if they're the same, bump last so we return 1
         for n, m in enumerate(messages[first:last], start=first):
             console.print(self.message_prefix(m, n))
-            print_markdown(m['content'])
+            console.print_markdown(m['content'])
             console.print('') # blank line
 
     def complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
@@ -262,7 +261,7 @@ class Conversation:
         # Summarize or forget if approaching token limit
         summary_cost = 0
         if self.summarize and total_tokens > self.max_tokens:
-            with status_spinner('Consolidating memory...'):
+            with console.status('Consolidating memory...'):
                 _, summary_cost = self.summarize_messages(self.summarize_len, delete=True)
 
         else: # If self.summarize = False, just forget oldest messages

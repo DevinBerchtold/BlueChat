@@ -46,6 +46,42 @@ A conversational engine for experimenting with OpenAI GPT Chat API. Enables a ba
 
 ---
 
+## Commands
+
+Commands begin with `!`. Everything else will be interpreted as conversation.
+
+`<!print|!messages>`: Print the messages object.
+
+`<!history|!h>`: Print full conversation history.
+
+`<!save|!s> [filename]`: Save the messages file to JSON/YAML.
+
+`<!load|!l> [filename]`: Load a messages file from JSON/YAML.
+
+`<!copy|!c> [all|code|n]`: Copy `n` latest messages to the clipboard. Only copy code blocks if `code` is specified.
+
+`<!paste|!p>`: Paste a multi-line input from the clipboard (bypass terminal limitations).
+
+`<!summary|!sum> [num_tokens]`: Summarize `num_tokens` or the conversation so far.
+
+`<!translate|!t> [ai_lang] [user_lang]`: Turn Translate Mode on or off.
+
+`<!model|!m> [model]`: Changes LLM model if `model` specified. Otherwise, prints current model.
+
+`<!auto|!a>`: Toggle automatic switch mode on or off.
+
+`<!undo|!u>`: Go back one step in the conversation.
+
+`<!debug|!d>`: Toggle debug mode on or off.
+
+`<!variable|!v> [variable]=[value]`: Set a variable value.
+
+`<!restart|!r>`: Delete all messages except system message and restart conversation.
+
+`<!exit|!x>`: Exit program.
+
+---
+
 ## Customization
 
 Add new AIs by adding YAML files to the `conversations` folder. As an example lets make a new bot, `emoji.yaml`

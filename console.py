@@ -1,3 +1,4 @@
+import os
 import sys
 import re
 
@@ -24,7 +25,12 @@ if RICH:
 ##    ## ##     ## ##   ### ##    ##    ##    ##     ## ##   ###    ##    ##    ##
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
 
+DEBUG = False
+
 REFRESH = 8
+# Paragraphs not in the Live object that have not been returned yet
+paragraphs = None
+resets = 0
 
 if RICH:
     class InlineStyle(OneDarkStyle):
@@ -151,6 +157,27 @@ def status(text='Loading...'):
     else:
         return(BasicStatus(text))
 
+def clear():
+    name = os.name
+    if name == 'nt': # For Windows
+        os.system('cls')
+    elif name == 'posix': # For Linux and macOS
+        os.system('clear')
+
+def reset(chat, filename, print_start):
+    global resets
+    resets += 1
+    clear()
+    print_filename(filename)
+    chat.print_messages(print_start, None)
+    if paragraphs is not None:
+        print(chat.ai_prefix())
+        if paragraphs != '':
+            print_markdown(paragraphs)
+            print('')
+    else:
+        print('\r'+chat.user_prefix(), end='')
+
 def generate_words(chunks):
     """Generates words where each element starts with whitespace and ends with a word"""
     buffer = ''
@@ -231,12 +258,16 @@ def print_filename(filename):
     print_rule(s)
 
 def print_stream(chunks):
+    global paragraphs
     if RICH:
+        paragraphs = ''
         for i, p in enumerate(generate_paragraphs(chunks)):
             if i == 0:
-                yield p
+                paragraphs += p
             else:
-                yield '\n\n'+p
+                paragraphs += '\n\n'+p
+        paragraphs, result = None, paragraphs
+        return result # Return and then reset paragraphs
     else:
         full_string = ''
         for c in chunks:
@@ -245,4 +276,4 @@ def print_stream(chunks):
             full_string += c
         sys.stdout.write('\n')
         sys.stdout.flush()
-        yield full_string
+        return full_string

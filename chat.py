@@ -1,3 +1,4 @@
+import os
 import sys
 import threading
 import time
@@ -5,7 +6,8 @@ import re
 
 import pyperclip
 
-from globals import *
+import files
+import console
 import conversation
 
 
@@ -19,6 +21,8 @@ import conversation
 ##    ## ##     ## ##   ### ##    ##    ##    ##     ## ##   ###    ##    ##    ##
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
 
+DEBUG = False
+
 BOT_FOLDER = 'bots'
 CHAT_FOLDER = 'chats'
 FILENAME = 'help'
@@ -29,7 +33,7 @@ CONFIG = f'{BOT_FOLDER}/{CONFIG_FILE}'
 AUTOSAVE = True
 AUTOLOAD = True
 FILENUM = 1
-DATE = TODAY
+DATE = files.TODAY
 
 AI_NAME = 'DefaultAI'
 try:
@@ -41,24 +45,24 @@ SWITCH = True
 FIRST_MESSAGE = True
 
 SAVED_VARS = ['USER_NAME', 'FILENAME', 'SWITCH']
-config = load_file(CONFIG)
+config = files.load_file(CONFIG)
 BOTS = config['bots']
 for k, v in config['variables'].items():
     # Import certain variables from bots file
     if k in SAVED_VARS:
         globals()[k] = v
 
-files = [f.split('.')[0] for f in os.listdir(BOT_FOLDER)]
-ALL_BOTS = [f for f in files if f != CONFIG_FILE]
-ALL_BOTS.sort()
+ALL_BOTS = sorted([
+    f.split('.')[0]
+    for f in os.listdir(BOT_FOLDER)
+    if f.split('.')[0] != CONFIG_FILE
+])
 PRINT_START = 1
-PARAGRAPHS = None
-RESETS = 0
 
 def save_config():
     vars = {k: globals()[k] for k in SAVED_VARS}
     data = {'variables': vars, 'bots': BOTS}
-    save_file(data, CONFIG)
+    files.save_file(data, CONFIG)
 
 def create_filename():
     prefix = FILENAME+'_' if FILENAME else ''
@@ -80,10 +84,10 @@ def filename_num(filename):
 
 def latest_file_today(string):
     all = os.listdir(CHAT_FOLDER)
-    files = [f.split('.')[0] for f in all if f.startswith(f'{string}_{DATE}')]
+    chat_files = [f.split('.')[0] for f in all if f.startswith(f'{string}_{DATE}')]
 
-    if files:
-        return f'{CHAT_FOLDER}/{max(files, key=filename_num)}'
+    if chat_files:
+        return f'{CHAT_FOLDER}/{max(chat_files, key=filename_num)}'
     else:
         return f'{BOT_FOLDER}/{string}'
 
@@ -103,8 +107,8 @@ def load_latest(string, reset=False):
     console.print_filename(file)
 
     if len(chat.messages) > 1:
-        PRINT_START = len(chat.messages)-2
-        chat.print_messages(chat.messages, PRINT_START, None)
+        PRINT_START = len(chat.history)-2
+        chat.print_messages(PRINT_START, None)
     else:
         PRINT_START = 1
 
@@ -140,26 +144,9 @@ def switch_context(user_input):
 
     return False
 
-def clear_screen():
-    name = os.name
-    if name == 'nt': # For Windows
-        os.system('cls')
-    elif name == 'posix': # For Linux and macOS
-        os.system('clear')
-
-def screen_reset():
-    global RESETS
-    RESETS += 1
-    clear_screen()
-    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
-    chat.print_messages(chat.messages, PRINT_START, None)
-    if PARAGRAPHS is not None:
-        console.print(chat.ai_prefix())
-        if PARAGRAPHS != '':
-            console.print_markdown(PARAGRAPHS)
-            console.print('')
-    else:
-        console.print('\r'+chat.user_prefix(), end='')
+def screen_reset(chat):
+    return console.reset(chat,
+        f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}',PRINT_START)
 
 def watch_window_size():
     last = os.get_terminal_size().columns
@@ -169,7 +156,7 @@ def watch_window_size():
         if current != last: # size changed, set flag to reset later
             reset_flag = True
         elif reset_flag: # reset once size stops changing (current == last)
-            screen_reset()
+            screen_reset(chat)
             reset_flag = False
         last = current
         time.sleep(0.1)
@@ -213,7 +200,7 @@ if __name__ == '__main__':
         user_input = chat.input(prefix=(not last_input_reset))
         last_input_reset = False
         if not user_input:
-            screen_reset()
+            screen_reset(chat)
             last_input_reset = True
             continue
         elif user_input.startswith('!'):
@@ -249,11 +236,10 @@ if __name__ == '__main__':
                 else:
                     console.print(f'Summary: {chat.summarize_messages()}')
 
-            elif command in ['print', 'messages']: # Print chat memory
-                chat.print_messages(chat.messages)
-
-            elif command in ['history', 'h']: # Print chat history
-                chat.print_messages(chat.history)
+            elif command in ['history', 'h', 'print', 'messages']: # Print chat memory
+                console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
+                chat.print_systems()
+                chat.print_messages()
 
             elif command in ['save', 's']: # Save chat to file
                 if parm:
@@ -372,10 +358,7 @@ if __name__ == '__main__':
 
             FIRST_MESSAGE = False
 
-            PARAGRAPHS = ''
-            for p in chat.get_dialogue(user_input):
-                PARAGRAPHS += p
-            PARAGRAPHS = None
+            chat.get_dialogue(user_input)
 
             if AUTOSAVE:
                 chat.save(create_filename())

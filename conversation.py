@@ -1,10 +1,12 @@
+from datetime import datetime
+import os
 import time
 
 import openai
 import tiktoken
 
-from globals import *
-
+import files
+import console
 
 
 
@@ -15,6 +17,8 @@ from globals import *
 ##       ##     ## ##  ####       ##    ##    ######### ##  ####    ##          ##
 ##    ## ##     ## ##   ### ##    ##    ##    ##     ## ##   ###    ##    ##    ##
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
+
+DEBUG = False
 
 MONEY = True # Print money conversion in token warning
 MODEL_COST = {
@@ -64,7 +68,6 @@ def chunks_from_response(response):
         yield chunk['choices'][0]['delta'].get('content', '')
 
 def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
-    success = False
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
             response = openai.ChatCompletion.create(
@@ -76,22 +79,17 @@ def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None
                 stream=(STREAM and print_result)
             )
             if STREAM and print_result:
-                for p in console.print_stream(chunks_from_response(response)):
-                    yield p
-                success = True
-                break
+                return console.print_stream(chunks_from_response(response))
             else:
                 full_string = response['choices'][0]['message']['content']
-                yield full_string
                 if print_result:
                     console.print('\n'+full_string)
-                success = True
-                break
+                return full_string
         except Exception as e:
             console.print(f"Error: {e}\nTrying again in {1} second...\n")
             time.sleep(1)
-    if not success:
-        raise ConnectionError("Failed to access OpenAI API after {API_TRIES} attempts.")
+
+    raise ConnectionError("Failed to access OpenAI API after {API_TRIES} attempts.")
 
 def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODEL):
     complete_messages = [
@@ -173,7 +171,7 @@ class Conversation:
         console.print('')
         return i
     
-    def num_tokens(self, messages=None):
+    def __num_tokens(self, messages=None):
         if messages == None:
             messages = self.messages
         return num_tokens_from_messages(messages, self.model)
@@ -189,17 +187,6 @@ class Conversation:
         
         model = 'GPT-4' if self.model == 'gpt-4' else 'GPT-3.5'
         return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{model}[/] '
-    
-    def message_prefix(self, message, n):
-        match message['role']:
-            case 'system' if n == 0:
-                return f'[bold]System:[/] '
-            case 'system':
-                return f'[bold]Summary {n}:[/] '
-            case 'user':
-                return self.user_prefix(n)
-            case 'assistant':
-                return self.ai_prefix(n)
 
     def messages_string(self, messages, divider=' '):
         strings = []
@@ -215,20 +202,36 @@ class Conversation:
             strings.append(s)
         return divider.join(strings)
     
-    def print_messages(self, messages, first=None, last=None):
-        if first == None: first = 0
-        elif first < 0: first += len(messages)
+    def __print_message(self, n, m):
+        match m['role']:
+            case 'system':
+                p = '[bold]System:' if n == 0 else f'[bold]Summary {n}:'
+            case 'user':
+                p = self.user_prefix(n)
+            case 'assistant':
+                p = self.ai_prefix(n)
+        console.print(p)
+        console.print_markdown(m['content'])
+        console.print('') # blank line
 
-        if last == None: last = len(messages)
-        elif last < 0: last += len(messages)
+    def print_systems(self):
+        for n, m in enumerate(self.messages):
+            self.__print_message(n, m)
+    
+    def print_messages(self, first=None, last=None):
+        l = len(self.history)
+
+        if first == None: first = 0
+        elif first < 0: first += l
+
+        if last == None: last = l
+        elif last < 0: last += l
 
         if last == first: last += 1 #if they're the same, bump last so we return 1
-        for n, m in enumerate(messages[first:last], start=first):
-            console.print(self.message_prefix(m, n))
-            console.print_markdown(m['content'])
-            console.print('') # blank line
+        for n, m in enumerate(self.history[first:last], start=first+1):
+            self.__print_message(n, m)
 
-    def complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
+    def __complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
         if not messages:
             if system and user:
                 messages = [
@@ -240,16 +243,14 @@ class Conversation:
         
         if prefix:
             console.print(prefix)
-        answer = ''
-        for p in chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result):
-            yield p
-            answer += p
+
+        answer = chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result)
         answer_list = [{"role": "assistant", "content": answer}]
-        cost = self.num_tokens() + self.num_tokens(answer_list)*2 # prompt cost + 2 x response cost
+        cost = self.__num_tokens() + self.__num_tokens(answer_list)*2 # prompt cost + 2 x response cost
         cost *= MODEL_COST[self.model]
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
-        yield cost
+        return answer, cost
 
     def get_dialogue(self, user_input):
         t0 = time.time()
@@ -257,7 +258,7 @@ class Conversation:
         if self.translate:
             user_input = get_translation(user_input, self.user_lang, self.ai_lang)
 
-        total_tokens = self.num_tokens()
+        total_tokens = self.__num_tokens()
         # Summarize or forget if approaching token limit
         summary_cost = 0
         if self.summarize and total_tokens > self.max_tokens:
@@ -265,7 +266,7 @@ class Conversation:
                 _, summary_cost = self.summarize_messages(self.summarize_len, delete=True)
 
         else: # If self.summarize = False, just forget oldest messages
-            while self.num_tokens() > self.max_tokens:
+            while self.__num_tokens() > self.max_tokens:
                 last = self.messages[1]['content']
                 if DEBUG: console.log(f'<Forgetting: {last}>')
                 del self.messages[1]
@@ -273,14 +274,8 @@ class Conversation:
         message = {"role": "user", "content": user_input}
         self.messages.append(message)
         self.history.append(message)
-        
-        answer = ''
-        for r in self.complete(print_result=True, prefix=self.ai_prefix()):
-            if isinstance(r, str):
-                answer += r
-                yield r
-            elif isinstance(r, float):
-                message_cost = r
+
+        answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix())
 
         message = { "role": "assistant", "content": answer }
         self.messages.append(message)
@@ -307,8 +302,8 @@ class Conversation:
     def summarize_messages(self, n=5000, delete=False):
         """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""
         i = 1
-        if self.num_tokens() > n:
-            while self.num_tokens(self.messages[:i]) < n:
+        if self.__num_tokens() > n:
+            while self.__num_tokens(self.messages[:i]) < n:
                 i += 1
         else:
             i = None
@@ -318,12 +313,7 @@ class Conversation:
 
         if DEBUG: console.log(f'Summarizing: {string}')
 
-        summary = ''
-        for r in self.complete(system='Summarize this conversation', user=string):
-            if isinstance(r, str):
-                summary += r
-            elif isinstance(r, float):
-                cost = r
+        summary, cost = self.__complete(system='Summarize this conversation', user=string)
 
         if DEBUG: console.log(f'Summary (+{cost:.2f}={self.cost:.2f}): {summary}')
 
@@ -337,8 +327,7 @@ class Conversation:
         return summary, cost
 
     def load(self, filename):
-
-        data = load_file(filename)
+        data = files.load_file(filename)
         if not data:
             console.print(f"Error: Couldn't load file {filename}")
             return False
@@ -371,7 +360,7 @@ class Conversation:
         self.messages[0]['content'] = self.messages[0]['content'].format(
             USER_NAME=self.user_name,
             AI_NAME=self.ai_name,
-            TODAY=TODAY
+            TODAY=files.TODAY
         )
 
         if self.history == []: # No history? Copy from messages
@@ -400,7 +389,7 @@ class Conversation:
         date = datetime.now()
         data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
 
-        save_file(data, filename)
+        files.save_file(data, filename)
 
         return filename
         

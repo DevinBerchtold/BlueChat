@@ -59,6 +59,17 @@ ALL_BOTS = sorted([
 ])
 PRINT_START = 1
 
+
+
+
+######## ##     ## ##    ##  ######  ######## ####  #######  ##    ##  ######
+##       ##     ## ###   ## ##    ##    ##     ##  ##     ## ###   ## ##    ##
+##       ##     ## ####  ## ##          ##     ##  ##     ## ####  ## ##
+######   ##     ## ## ## ## ##          ##     ##  ##     ## ## ## ##  ######
+##       ##     ## ##  #### ##          ##     ##  ##     ## ##  ####       ##
+##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
+##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
+
 def save_config():
     vars = {k: globals()[k] for k in SAVED_VARS}
     data = {'variables': vars, 'bots': BOTS}
@@ -164,6 +175,225 @@ def watch_window_size():
 
 
 
+ ######   #######  ##     ## ##     ##    ###    ##    ## ########   ######
+##    ## ##     ## ###   ### ###   ###   ## ##   ###   ## ##     ## ##    ##
+##       ##     ## #### #### #### ####  ##   ##  ####  ## ##     ## ##
+##       ##     ## ## ### ## ## ### ## ##     ## ## ## ## ##     ##  ######
+##       ##     ## ##     ## ##     ## ######### ##  #### ##     ##       ##
+##    ## ##     ## ##     ## ##     ## ##     ## ##   ### ##     ## ##    ##
+ ######   #######  ##     ## ##     ## ##     ## ##    ## ########   ######
+
+def restart_command(chat, parm, words):
+    """Restart the chat by clearing memory and creating a new save file."""
+    global DATE, FILENUM
+    console.print('Restarting conversation')
+    chat.reset(f'{BOT_FOLDER}/{FILENAME}')
+    _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
+    FILENUM += 1
+
+def undo_command(chat, parm, words):
+    """Undo the last messages in the chat. Defaults to last 2 messages if parameter is not specified."""
+    if parm:
+        n = int(parm)
+    else:
+        n = 2
+    if len(chat.messages) >= n:
+        chat.messages = chat.messages[:-n]
+        chat.history = chat.history[:-n]
+        console.print(f'Removing last {n} messages')
+    else:
+        console.print('No messages to remove')
+
+def summary_command(chat, parm, words):
+    """Summarize the last tokens of the conversation. Summarizes the entire conversation if number of tokens is not specified."""
+    if parm:
+        s = chat.summarize_messages(int(parm))
+    else:
+        s = chat.summarize_messages()
+    console.print(f'Summary: {s}')
+
+def history_command(chat, parm, words):
+    """Print the conversation system messages and full chat history."""
+    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
+    chat.print_systems()
+    chat.print_messages()
+
+def save_command(chat, parm, words):
+    """Save the chat to the given file. Automatically adds file extension and names the file if a filename is not specified."""
+    if parm:
+        chat.save(parm)
+        console.print(f"Data saved to {parm}")
+    else:
+        chat.save(create_filename())
+
+def load_command(chat, parm, words):
+    """Load the chat from the given file. Loads the latest file if a bot name is specified, or the exact file if a filename is specified."""
+    global FIRST_MESSAGE
+    FIRST_MESSAGE = False # Just loaded, don't switch context right away
+    if parm:
+        if '_' in parm:
+            if '/' in parm:
+                chat.load(parm)
+            else:
+                chat.load(f'{CHAT_FOLDER}/{parm}')
+        else:
+            load_latest(parm)
+    else:
+        console.print('Error: No filename specified')
+
+def model_command(chat, parm, words):
+    """Set the LLM model (e.g. gpt-3.5-turbo, gpt-4) to be used in the chat. If a model is not specified, prints the current model. Accepts abbreviations like 'gpt-3.5' or just '3'"""
+    if parm in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
+        chat.model = 'gpt-3.5-turbo'
+    elif parm in ['4', 'gpt-4']:
+        chat.model = 'gpt-4'
+    console.print(f"Model={chat.model}")
+
+def translate_command(chat, parm, words):
+    """Toggle translate mode if no parameters are specified. If specified, the first parameter is the AI language and the second parameter is the user's language."""
+    if parm:
+        chat.translate = True
+        chat.ai_lang = parm
+        if len(words) == 3:
+            chat.user_lang = words[2]
+        else:
+            chat.user_lang = 'English'
+    else:
+        chat.translate = not chat.translate
+
+    console.print(f'Translate={chat.translate}, AI={chat.ai_lang}, User={chat.user_lang}')
+
+def debug_command(chat, parm, words):
+    """Toggle debug mode for all modules."""
+    DEBUG = not DEBUG
+    files.DEBUG = DEBUG
+    console.DEBUG = DEBUG
+    conversation.DEBUG = DEBUG
+    console.print(f'Debug={DEBUG}')
+
+def auto_command(chat, parm, words):
+    """Toggle auto-switch context mode. Text after the command is sent as a message."""
+    global FIRST_MESSAGE, SWITCH
+    if parm: # turn auto-switch on and take user input
+        user_input = ' '.join(words[1:]) # everything after !a
+        SWITCH = True
+        FIRST_MESSAGE = True
+        return user_input
+    else: # toggle auto-switching
+        if FIRST_MESSAGE and SWITCH:
+            SWITCH = False
+            FIRST_MESSAGE = False
+        else:
+            SWITCH = True
+            FIRST_MESSAGE = True
+        console.print(f'Auto-switch={SWITCH}')
+
+def variable_command(chat, parm, words):
+    """Set or print variables for global or chat settings. Sets a variable specified in the format `variable=value`. If no variable is specified, prints out all variables."""
+    if parm:
+        var, string = parm.split('=')
+        try: value = int(string)
+        except ValueError:
+            try: value = float(string)
+            except ValueError:
+                if string == 'True': value = True
+                elif string == 'False': value = False
+                else: value = string
+
+        if var.isupper() and var in globals():
+            globals()[var] = value
+            console.print(f'global {var}={value}')
+        elif var.islower() and hasattr(chat, var):
+            setattr(chat, var, value)
+            console.print(f'chat.{var}={value}')
+        else:
+            console.print('Unrecognized variable')
+    else:
+        console.print({k: v for k, v in globals().items() if k.isupper()})
+        chat.print_vars()
+
+def copy_command(chat, parm, words):
+    """Copy a number of chat messages, all messages, or code blocks to the clipboard. Copies the last 2 messages by default."""
+    n = None
+    if parm:
+        if parm == 'all':
+            n = len(chat.messages)
+        elif parm == 'code':
+            text = chat.messages[-1]['content']
+            pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
+            matches = re.findall(pattern, text)
+            pyperclip.copy('\n\n'.join(matches))
+            console.print(f'Copied {len(matches)} code blocks to clipboard\n')
+        else:
+            n = int(parm)
+    else:
+        n = 2
+    if n:
+        pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
+        console.print(f'Copied {n} messages to clipboard\n')
+
+def paste_command(chat, parm, words):
+    """Paste the clipboard content as a message. Text after the command is prepended to the message before it is sent."""
+    user_input = pyperclip.paste()
+    if parm: # Prepend everything after !p
+        user_input = ' '.join(words[1:]) + '\n' + user_input
+    console.print(user_input)
+    return user_input
+
+def exit_command(chat, parm, words):
+    """Exit the application."""
+    console.print('Goodbye')
+    sys.exit()
+
+COMMANDS = (
+    ('help', 'h'),
+    ('exit', 'e', 'x', 'quit', 'q'),
+    ('restart', 'r'),
+    ('undo', 'u', 'redo'),
+    ('summary', 'sum'),
+    ('history', 'hi', 'messages', 'me', 'print', 'pr'),
+    ('save', 's'),
+    ('load', 'l'),
+    ('model', 'm'),
+    ('translate', 't'),
+    ('debug', 'd'),
+    ('auto', 'a'),
+    ('variable', 'v', 'var'),
+    ('copy', 'c'),
+    ('paste', 'p')
+)
+
+def help_command(chat, parm, words):
+    """Print the help screen."""
+    help_strings = []
+    for cmds in COMMANDS:
+        n = len(cmds)
+        name_list = []
+        skip = False
+        for i, c in enumerate(cmds):
+            if skip: skip = False
+            else:
+                if i < n-1 and c.startswith(cmds[i+1]): # command 2 is abbreviation for command 1:
+                    name_list.append(f'[od.yellow]!{cmds[i+1]}[/od.yellow]{c[len(cmds[i+1]):]}')
+                    skip = True
+                else:
+                    name_list.append('!'+c)
+        names = ', '.join(name_list)
+        doc = globals()[f'{cmds[0]}_command'].__doc__
+        help_strings.append(f'[bold]{names}:[/] {doc}')
+    console.print_columns(help_strings)
+    console.print('')
+
+commands = {}
+for cmds in COMMANDS:
+    string = f'{cmds[0]}_command'
+    func = globals()[string]
+    for cmd in cmds:
+        commands[cmd] = func
+
+
+
+
 ##     ##    ###    #### ##    ##
 ###   ###   ## ##    ##  ###   ##
 #### ####  ##   ##   ##  ####  ##
@@ -212,139 +442,10 @@ if __name__ == '__main__':
                 parm = ''
 
             # Process commands
-            if command in ['exit', 'e', 'x']: # Exit program
-                console.print('Goodbye')
-                break
-            
-            elif command in ['restart', 'r']: # Restart chat
-                console.print('Restarting conversation')
-                chat.reset(f'{BOT_FOLDER}/{FILENAME}')
-                _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
-                FILENUM += 1
-
-            elif command in ['redo', 'undo', 'u']: # Undo messages
-                if len(chat.messages) > 1:
-                    console.print('Removing last 2 messages')
-                    chat.messages = chat.messages[:-2]
-                    chat.history = chat.history[:-2]
-                else:
-                    console.print('No messages to remove')
-
-            elif command in ['summary', 'sum']: # Summarize chat
-                if parm:
-                    console.print(f'Summary: {chat.summarize_messages(int(parm))}')
-                else:
-                    console.print(f'Summary: {chat.summarize_messages()}')
-
-            elif command in ['history', 'h', 'print', 'messages']: # Print chat memory
-                console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
-                chat.print_systems()
-                chat.print_messages()
-
-            elif command in ['save', 's']: # Save chat to file
-                if parm:
-                    chat.save(parm)
-                    console.print(f"Data saved to {parm}")
-                else:
-                    chat.save(create_filename())
-
-            elif command in ['load', 'l']: # Load chat from file
-                FIRST_MESSAGE = False # Just loaded, don't switch context right away
-                if parm:
-                    if '_' in parm:
-                        if '/' in parm:
-                            chat.load(parm)
-                        else:
-                            chat.load(f'{CHAT_FOLDER}/{parm}')
-                    else:
-                        load_latest(parm)
-                else:
-                    console.print('Error: No filename specified')
-
-            elif command in ['model', 'm']: # Set GPT model
-                if parm in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
-                    chat.model = 'gpt-3.5-turbo'
-                elif parm in ['4', 'gpt-4']:
-                    chat.model = 'gpt-4'
-                console.print(f"Model={chat.model}")
-
-            elif command in ['translate', 't']: # Translate mode
-                if parm:
-                    chat.translate = True
-                    chat.ai_lang = parm
-                    if len(words) == 3:
-                        chat.user_lang = words[2]
-                    else:
-                        chat.user_lang = 'English'
-                else:
-                    chat.translate = not chat.translate
-
-                console.print(f'Translate={chat.translate}, AI={chat.ai_lang}, User={chat.user_lang}')
-
-            elif command in ['debug', 'd']: # Toggle debug mode
-                DEBUG = not DEBUG
-                console.print(f'Debug={DEBUG}')
-
-            elif command in ['auto', 'a']: # Auto-switch context mode
-                if parm: # turn auto-switch on and take user input
-                    user_input = ' '.join(words[1:]) # everything after !a
-                    SWITCH = True
-                    FIRST_MESSAGE = True
-                else: # toggle auto-switching
-                    if FIRST_MESSAGE and SWITCH:
-                        SWITCH = False
-                        FIRST_MESSAGE = False
-                    else:
-                        SWITCH = True
-                        FIRST_MESSAGE = True
-                    console.print(f'Auto-switch={SWITCH}')
-
-            elif command in ['variable', 'var', 'variables', 'vars', 'v']: # Set or print variables
-                if parm:
-                    var, string = parm.split('=')
-                    try: value = int(string)
-                    except ValueError:
-                        try: value = float(string)
-                        except ValueError:
-                            if string == 'True': value = True
-                            elif string == 'False': value = False
-                            else: value = string
-
-                    if var.isupper() and var in globals():
-                        globals()[var] = value
-                        console.print(f'global {var}={value}')
-                    elif var.islower() and hasattr(chat, var):
-                        setattr(chat, var, value)
-                        console.print(f'chat.{var}={value}')
-                    else:
-                        console.print('Unrecognized variable')
-                else:
-                    console.print({k: v for k, v in globals().items() if k.isupper()})
-                    chat.print_vars()
-
-            elif command in ['copy', 'c']: # Copy chat messages to clipboard
-                n = None
-                if parm:
-                    if parm == 'all':
-                        n = len(chat.messages)
-                    elif parm == 'code':
-                        text = chat.messages[-1]['content']
-                        pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
-                        matches = re.findall(pattern, text)
-                        pyperclip.copy('\n\n'.join(matches))
-                        console.print(f'Copied {len(matches)} code blocks to clipboard\n')
-                    else:
-                        n = int(parm)
-                else:
-                    n = 2
-                if n:
-                    pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
-                    console.print(f'Copied {n} messages to clipboard\n')
-
-            elif command in ['paste', 'p']: # Paste clipboard to a message
-                user_input = pyperclip.paste()
-                console.print(user_input)
-
+            if command in commands:
+                ret = commands[command](chat, parm, words)
+                if ret:
+                    user_input = ret
             elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)
                 FIRST_MESSAGE = False # Just loaded, don't switch context right away
                 load_latest(command, reset=True)

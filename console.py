@@ -12,6 +12,7 @@ if RICH:
     from rich.status import Status
     from rich.align import Align
     from rich.rule import Rule
+    from rich.columns import Columns
     from pygments.styles.onedark import OneDarkStyle
 
 
@@ -256,6 +257,33 @@ def print_filename(filename):
         case [f]:
             s = f'[od.dim]{folder} /[/] [bold]{f}'
     print_rule(s)
+
+def plen(string): # print length
+    return len(remove_tags(string))
+
+def split_string_list(strings, w):
+    total_chars = float(sum(plen(s) for s in strings))
+    total_chars += w*(len(strings)-1)*1.5 # estimate blank lines
+    half_chars = total_chars / 2.0
+
+    first_part = [strings[0]]
+    second_part = []
+    running_sum = float(plen(strings[0]))
+    for s in strings[1:]:
+        l = (w*1.5)+plen(s)
+        if running_sum+(l*0.65) < half_chars:
+            first_part.append(s)
+            running_sum += l
+        else:
+            second_part.append(s)
+
+    return first_part, second_part
+
+def print_columns(cells):
+    w = os.get_terminal_size().columns/2.0
+    l, r = split_string_list(cells, w-3.0)
+    cols = Columns(('\n\n'.join(l), '\n\n'.join(r)), padding=(0, 3), width=int(w-6.0))
+    print(cols, justify='center')
 
 def print_stream(chunks):
     global paragraphs

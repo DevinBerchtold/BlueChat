@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import re
+import inspect
 
 import pyperclip
 
@@ -183,7 +184,7 @@ def watch_window_size():
 ##    ## ##     ## ##     ## ##     ## ##     ## ##   ### ##     ## ##    ##
  ######   #######  ##     ## ##     ## ##     ## ##    ## ########   ######
 
-def restart_command(chat, parm, words):
+def restart_command(chat, *_):
     """Restart the chat by clearing memory and creating a new save file."""
     global DATE, FILENUM
     console.print('Restarting conversation')
@@ -191,10 +192,10 @@ def restart_command(chat, parm, words):
     _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
     FILENUM += 1
 
-def undo_command(chat, parm, words):
-    """Undo the last messages in the chat. Defaults to last 2 messages if parameter is not specified."""
-    if parm:
-        n = int(parm)
+def undo_command(chat, num, *_):
+    """Undo and remove the last `num` messages in the chat. Removes the last 2 messages if `num` is not specified."""
+    if num:
+        n = int(num)
     else:
         n = 2
     if len(chat.messages) >= n:
@@ -204,58 +205,58 @@ def undo_command(chat, parm, words):
     else:
         console.print('No messages to remove')
 
-def summary_command(chat, parm, words):
-    """Summarize the last tokens of the conversation. Summarizes the entire conversation if number of tokens is not specified."""
-    if parm:
-        s = chat.summarize_messages(int(parm))
+def summary_command(chat, tokens, *_):
+    """Summarize the last `tokens` of the conversation. Summarizes the entire conversation if `tokens` is not specified."""
+    if tokens:
+        s = chat.summarize_messages(int(tokens))
     else:
         s = chat.summarize_messages()
     console.print(f'Summary: {s}')
 
-def history_command(chat, parm, words):
+def history_command(chat, *_):
     """Print the conversation system messages and full chat history."""
     console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
     chat.print_systems()
     chat.print_messages()
 
-def save_command(chat, parm, words):
-    """Save the chat to the given file. Automatically adds file extension and names the file if a filename is not specified."""
-    if parm:
-        chat.save(parm)
-        console.print(f"Data saved to {parm}")
+def save_command(chat, filename, *_):
+    """Save the chat to `filename`. Automatically adds file extension and names the file if `filename` is not specified."""
+    if filename:
+        chat.save(filename)
+        console.print(f"Data saved to {filename}")
     else:
         chat.save(create_filename())
 
-def load_command(chat, parm, words):
-    """Load the chat from the given file. Loads the latest file if a bot name is specified, or the exact file if a filename is specified."""
+def load_command(chat, filename, *_):
+    """Load the chat from `filename`. Loads the latest file if `filename` is a bot name or the exact file if it's a filename."""
     global FIRST_MESSAGE
     FIRST_MESSAGE = False # Just loaded, don't switch context right away
-    if parm:
-        if '_' in parm:
-            if '/' in parm:
-                chat.load(parm)
+    if filename:
+        if '_' in filename:
+            if '/' in filename:
+                chat.load(filename)
             else:
-                chat.load(f'{CHAT_FOLDER}/{parm}')
+                chat.load(f'{CHAT_FOLDER}/{filename}')
         else:
-            load_latest(parm)
+            load_latest(filename)
     else:
         console.print('Error: No filename specified')
 
-def model_command(chat, parm, words):
-    """Set the LLM model (e.g. gpt-3.5-turbo, gpt-4) to be used in the chat. If a model is not specified, prints the current model. Accepts abbreviations like 'gpt-3.5' or just '3'"""
-    if parm in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
+def model_command(chat, model, *_):
+    """Set the LLM model to be used in the chat if `model` is specified. Accepts abbreviations like 'gpt-3.5' and 'gpt-4' or just '3' and '4'. Prints the current model if `model` is not specified."""
+    if model in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
         chat.model = 'gpt-3.5-turbo'
-    elif parm in ['4', 'gpt-4']:
+    elif model in ['4', 'gpt-4']:
         chat.model = 'gpt-4'
     console.print(f"Model={chat.model}")
 
-def translate_command(chat, parm, words):
-    """Toggle translate mode if no parameters are specified. If specified, the first parameter is the AI language and the second parameter is the user's language."""
-    if parm:
+def translate_command(chat, ai, user):
+    """Toggle translate mode if no parameters are specified. If specified, `ai` is the AI language and `user` is the users language."""
+    if ai:
         chat.translate = True
-        chat.ai_lang = parm
-        if len(words) == 3:
-            chat.user_lang = words[2]
+        chat.ai_lang = ai
+        if user:
+            chat.user_lang = user
         else:
             chat.user_lang = 'English'
     else:
@@ -263,19 +264,20 @@ def translate_command(chat, parm, words):
 
     console.print(f'Translate={chat.translate}, AI={chat.ai_lang}, User={chat.user_lang}')
 
-def debug_command(chat, parm, words):
+def debug_command(*_):
     """Toggle debug mode for all modules."""
+    global DEBUG
     DEBUG = not DEBUG
     files.DEBUG = DEBUG
     console.DEBUG = DEBUG
     conversation.DEBUG = DEBUG
     console.print(f'Debug={DEBUG}')
 
-def auto_command(chat, parm, words):
-    """Toggle auto-switch context mode. Text after the command is sent as a message."""
+def auto_command(_, *text):
+    """Toggle auto-switch context mode. If `text` is specified, context is checked and `text` is sent as a message."""
     global FIRST_MESSAGE, SWITCH
-    if parm: # turn auto-switch on and take user input
-        user_input = ' '.join(words[1:]) # everything after !a
+    if switch: # turn auto-switch on and take user input
+        user_input = ' '.join(text[1:]) # everything after !a
         SWITCH = True
         FIRST_MESSAGE = True
         return user_input
@@ -288,8 +290,8 @@ def auto_command(chat, parm, words):
             FIRST_MESSAGE = True
         console.print(f'Auto-switch={SWITCH}')
 
-def variable_command(chat, parm, words):
-    """Set or print variables for global or chat settings. Sets a variable specified in the format `variable=value`. If no variable is specified, prints out all variables."""
+def variable_command(chat, parm, *_):
+    """Set or print variables for global or chat settings. If `parm` is specified in the format `variable=value`, set the variable. If not specified, print all variables."""
     if parm:
         var, string = parm.split('=')
         try: value = int(string)
@@ -312,8 +314,8 @@ def variable_command(chat, parm, words):
         console.print({k: v for k, v in globals().items() if k.isupper()})
         chat.print_vars()
 
-def copy_command(chat, parm, words):
-    """Copy a number of chat messages, all messages, or code blocks to the clipboard. Copies the last 2 messages by default."""
+def copy_command(chat, parm, *_):
+    """Copy the last `parm` chat messages to the clipboard if `parm` is a number or 'all'. Copy code blocks from the last message if `parm` is 'code'. Copies 2 messages by default."""
     n = None
     if parm:
         if parm == 'all':
@@ -332,15 +334,15 @@ def copy_command(chat, parm, words):
         pyperclip.copy(chat.messages_string(chat.messages[-n:], divider='\n\n'))
         console.print(f'Copied {n} messages to clipboard\n')
 
-def paste_command(chat, parm, words):
-    """Paste the clipboard content as a message. Text after the command is prepended to the message before it is sent."""
+def paste_command(_, *text):
+    """Paste the clipboard content and send as a message. If `text` is specified, `text` is prepended to the message before sending."""
     user_input = pyperclip.paste()
-    if parm: # Prepend everything after !p
-        user_input = ' '.join(words[1:]) + '\n' + user_input
+    if text: # Prepend everything after !p
+        user_input = ' '.join(text) + '\n' + user_input
     console.print(user_input)
     return user_input
 
-def exit_command(chat, parm, words):
+def exit_command(*_):
     """Exit the application."""
     console.print('Goodbye')
     sys.exit()
@@ -363,7 +365,7 @@ COMMANDS = (
     ('paste', 'p')
 )
 
-def help_command(chat, parm, words):
+def help_command(*_):
     """Print the help screen."""
     help_strings = []
     for cmds in COMMANDS:
@@ -372,15 +374,24 @@ def help_command(chat, parm, words):
         skip = False
         for i, c in enumerate(cmds):
             if skip: skip = False
-            else:
-                if i < n-1 and c.startswith(cmds[i+1]): # command 2 is abbreviation for command 1:
-                    name_list.append(f'[od.yellow]!{cmds[i+1]}[/od.yellow]{c[len(cmds[i+1]):]}')
-                    skip = True
+            else: # Command n+1 might be alias for command n
+                if i < n-1 and c.startswith(cmds[i+1]):
+                    name_list.append(f'[bold][od.cyan]!{cmds[i+1]}[/]{c[len(cmds[i+1]):]}[/]')
+                    skip = True # Skip the next one
                 else:
-                    name_list.append('!'+c)
-        names = ', '.join(name_list)
-        doc = globals()[f'{cmds[0]}_command'].__doc__
-        help_strings.append(f'[bold]{names}:[/] {doc}')
+                    name_list.append(f'[bold]!{c}[/]')
+        names = '[od.dim]|[/]'.join(name_list)
+        func = globals()[f'{cmds[0]}_command']
+        doc = func.__doc__
+
+        # Create command parms from function arguments
+        parms = inspect.signature(func).parameters
+        parms = [p for p in parms if p not in ('chat', '_')]
+        if parms: parm_string = ' '+' '.join(parms)
+        else: parm_string = ''
+        doc_replaced = re.sub(r'`(.*?)`', r'[od.yellow]\1[/]', doc) # Highlight `parms`
+
+        help_strings.append(f'{names}[bold][od.yellow]{parm_string}[/][/]: {doc_replaced}')
     console.print_columns(help_strings)
     console.print('')
 
@@ -434,16 +445,15 @@ if __name__ == '__main__':
             last_input_reset = True
             continue
         elif user_input.startswith('!'):
-            words = user_input.split(' ')
-            command = words[0][1:]
-            if len(words) > 1:
-                parm = words[1]
-            else:
-                parm = ''
+            words = user_input[1:].split(' ') # remove ! and split
+            command = words[0]
+            args = words[1:]
+            if len(args) < 2: # All commands take 2 optional arguments (for now)
+                args += [None] * (2-len(args)) # Extend to minimum length
 
             # Process commands
             if command in commands:
-                ret = commands[command](chat, parm, words)
+                ret = commands[command](chat, *args)
                 if ret:
                     user_input = ret
             elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)

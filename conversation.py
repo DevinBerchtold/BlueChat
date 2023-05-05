@@ -285,19 +285,20 @@ class Conversation:
             answer = get_translation(answer, self.ai_lang, self.user_lang)
 
         total_time = time.time()-t0
-        if DEBUG: console.log(f'chat tokens={total_tokens}, time={total_time:.3}s')
+        min, sec = divmod(total_time, 60)
+        if min: time_string = f'[od.cyan_dim]{min:.0f}:{sec:05.2f}s[/]'
+        else: time_string = f'[od.cyan_dim]{sec:05.2f}s[/]'
 
-        cost_string = f'{total_tokens} tokens'
+        cost_string = f'[od.dim][od.cyan_dim]{total_tokens}[/] tokens'
         if MONEY:
-            if summary_cost:
-                cost_string += f' (+{summary_cost:.2f}+{message_cost:.2f}={self.cost:.2f})'
-            else:
-                cost_string += f' (+{message_cost:.2f}={self.cost:.2f})'
+            fmt = lambda c: f'[od.green_dim]{c:.2f}[/]'
+            summary_string = '+' + fmt(summary_cost) if summary_cost else ''
+            cost_string += f' ({summary_string}+{fmt(message_cost)}={fmt(self.cost)})'
 
         if total_tokens > self.token_warning:
-            console.print(f'[od.green_dim]{cost_string} [od.dim]Consider restarting conversation[/]', justify='center')
+            console.print(f'{cost_string} {time_string} - Consider restarting conversation\n', justify='center')
         elif MONEY:
-            console.print(f'[od.green_dim]{cost_string}[/]', justify='center')
+            console.print(f'{cost_string} {time_string}\n', justify='center')
 
     def summarize_messages(self, n=5000, delete=False):
         """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""

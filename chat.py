@@ -276,8 +276,9 @@ def debug_command(*_):
 def auto_command(_, *text):
     """Toggle auto-switch context mode. If `text` is specified, context is checked and `text` is sent as a message."""
     global FIRST_MESSAGE, SWITCH
-    if switch: # turn auto-switch on and take user input
-        user_input = ' '.join(text[1:]) # everything after !a
+    text = [w for w in text if w is not None]
+    if text: # turn auto-switch on and take user input
+        user_input = ' '.join(text) # everything after !a
         SWITCH = True
         FIRST_MESSAGE = True
         return user_input
@@ -337,6 +338,7 @@ def copy_command(chat, parm, *_):
 def paste_command(_, *text):
     """Paste the clipboard content and send as a message. If `text` is specified, `text` is prepended to the message before sending."""
     user_input = pyperclip.paste()
+    text = [w for w in text if w is not None]
     if text: # Prepend everything after !p
         user_input = ' '.join(text) + '\n' + user_input
     console.print(user_input)

@@ -4,6 +4,7 @@ import time
 
 import openai
 import tiktoken
+import google.generativeai as palm
 
 import files
 import console
@@ -23,10 +24,12 @@ DEBUG = False
 MONEY = True # Print money conversion in token warning
 MODEL_COST = {
     'gpt-3.5-turbo': 0.002 / 1000,  # $0.002 / 1K tokens 4/6/23
-    'gpt-4': 0.03 / 1000            # $0.03 / 1K tokens 4/6/23
+    'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 4/6/23
+    'models/chat-bison-001': 0.001 / 1000 # ??? this is wrong 5/16/23
 }
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
+# MODEL = 'models/chat-bison-001' # PaLM 2
 STREAM = True
 API_TRIES = 3
 
@@ -38,6 +41,7 @@ except Exception:
     USER_ID = 'unknown'
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
+palm.configure(api_key=os.environ["PALM_API_KEY"])
 
 
 
@@ -67,29 +71,56 @@ def chunks_from_response(response):
     for chunk in response:
         yield chunk['choices'][0]['delta'].get('content', '')
 
+def palm_messages(messages):
+    return [
+        {'author': m['role'], 'content': m['content']}
+        for m in messages if m['role'] != 'system'
+    ]
+
 def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=openai_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                user=USER_ID,
-                stream=(STREAM and print_result)
-            )
-            if STREAM and print_result:
-                return console.print_stream(chunks_from_response(response))
-            else:
-                full_string = response['choices'][0]['message']['content']
+            if model.startswith('models/'): # PaLM
                 if print_result:
-                    console.print('\n'+full_string)
+                    with console.status('Getting response from Google...'):
+                        response = palm.chat(
+                            model=model,
+                            context=openai_messages[0]['content'],
+                            messages=palm_messages(openai_messages),
+                            temperature=temperature
+                        )
+                else:
+                    response = palm.chat(
+                        model=model,
+                        context=openai_messages[0]['content'],
+                        messages=palm_messages(openai_messages),
+                        temperature=temperature
+                    )
+                full_string = response.last
+                if print_result:
+                    console.print_markdown(full_string)
                 return full_string
+            else:
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    user=USER_ID,
+                    stream=(STREAM and print_result)
+                )
+                if STREAM and print_result:
+                    return console.print_stream(chunks_from_response(response))
+                else:
+                    full_string = response['choices'][0]['message']['content']
+                    if print_result:
+                        console.print_markdown(full_string)
+                    return full_string
         except Exception as e:
             console.print(f"Error: {e}\nTrying again in {1} second...\n")
             time.sleep(1)
 
-    raise ConnectionError("Failed to access OpenAI API after {API_TRIES} attempts.")
+    raise ConnectionError(f"Failed to access LLM API after {API_TRIES} attempts.")
 
 def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODEL):
     complete_messages = [
@@ -174,7 +205,13 @@ class Conversation:
     def __num_tokens(self, messages=None):
         if messages == None:
             messages = self.messages
-        return num_tokens_from_messages(messages, self.model)
+        if self.model.startswith('models/'): # PaLM
+            return palm.count_message_tokens(
+                context=messages[0]['content'],
+                messages=palm_messages(messages)
+            )['token_count']
+        else:
+            return num_tokens_from_messages(messages, self.model)
 
     def user_prefix(self, n=None):
         if n is None:
@@ -184,9 +221,12 @@ class Conversation:
     def ai_prefix(self, n=None):
         if n is None:
             n = len(self.history)+1
-        
-        model = 'GPT-4' if self.model == 'gpt-4' else 'GPT-3.5'
-        return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{model}[/] '
+        labels = {
+            'gpt-4': 'GPT-4',
+            'gpt-3.5-turbo': 'GPT-3',
+            'models/chat-bison-001': 'Bison'
+        }
+        return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{labels[self.model]}[/] '
 
     def messages_string(self, messages, divider=' '):
         strings = []

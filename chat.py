@@ -242,12 +242,22 @@ def load_command(chat, filename, *_):
     else:
         console.print('Error: No filename specified')
 
-def model_command(chat, model, *_):
-    """Set the LLM model to be used in the chat if `model` is specified. Accepts abbreviations like 'gpt-3.5' and 'gpt-4' or just '3' and '4'. Prints the current model if `model` is not specified."""
+def model_command(chat, model, reset):
+    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-3.5', 'gpt-4', or 'bison' or an abbreviation like '3', '4', or 'b'. If `reset` is 'r' or 'redo', the last message is regenerated with the new model."""
     if model in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
         chat.model = 'gpt-3.5-turbo'
     elif model in ['4', 'gpt-4']:
         chat.model = 'gpt-4'
+    elif model in ['2', 'b', 'palm', 'bison', 'models/chat-bison-001']:
+        chat.model = 'models/chat-bison-001'
+
+    if reset in ['r', 'redo', 'reset']:
+        user_message = chat.messages[-2]['content']
+        if len(chat.messages) >= 2:
+            chat.messages = chat.messages[:-2]
+            chat.history = chat.history[:-2]
+        console.print(f'Redoing with {chat.model}...')
+        return user_message
     console.print(f"Model={chat.model}")
 
 def translate_command(chat, ai, user):

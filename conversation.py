@@ -88,7 +88,7 @@ def palm_messages(messages):
         for m in messages if m['role'] != 'system'
     ]
 
-def chat_complete(openai_messages, model=MODEL, temperature=0.8, print_result=True):
+def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
             if model.startswith('models/'): # PaLM

@@ -23,9 +23,19 @@ DEBUG = False
 
 MONEY = True # Print money conversion in token warning
 MODEL_COST = {
-    'gpt-3.5-turbo': 0.002 / 1000,  # $0.002 / 1K tokens 4/6/23
-    'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 4/6/23
-    'models/chat-bison-001': 0.001 / 1000 # ??? this is wrong 5/16/23
+    # https://openai.com/pricing
+    'gpt-3.5-turbo': 0.001 / 1000,  # $0.001 / 1K tokens 11/30/23
+    'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 11/30/23
+    'gpt-4-32k': 0.06 / 1000,       # $0.06 / 1K tokens 11/30/23
+    'gpt-4-1106-preview': 0.01 / 1000, # $0.01 / 1K tokens 11/30/23
+    'gpt-4-turbo': 0.01 / 1000,     # $0.01 / 1K tokens 11/30/23
+    # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
+    'models/chat-bison-001': 0.0005 / 1000, # $0.0005 / 1K characters 11/30/23
+    'models/chat-unicorn-001': 0.0025 / 1000 # $0.0025 / 1K characters 11/30/23
+    # Old prices
+    # 'gpt-3.5-turbo': 0.002 / 1000,  # $0.002 / 1K tokens 4/6/23
+    # 'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 4/6/23
+    # 'models/chat-bison-001': 0.001 / 1000 # ??? this is wrong 5/16/23
 }
 # MODEL = "gpt-3.5-turbo" # Cheaper
 MODEL = "gpt-4" # Better
@@ -167,13 +177,13 @@ class Conversation:
         self.reset(filename=filename, system=system)
 
     def reset(self, filename=None, system=None, ai=None):
-        self.max_tokens = 1000
-        self.token_warning = 500
+        self.max_tokens = 8000
+        self.token_warning = 4000
         self.cost = 0
 
         self.summarize = True
         self.summarized = False
-        self.summarize_len = 400
+        self.summarize_len = 4000
 
         # Translate requests and responses
         self.translate = False
@@ -206,9 +216,12 @@ class Conversation:
         if messages == None:
             messages = self.messages
         if self.model.startswith('models/'): # PaLM
+            p_m = palm_messages(messages)
+            if len(p_m) == 0:
+                return 0
             return palm.count_message_tokens(
                 context=messages[0]['content'],
-                messages=palm_messages(messages)
+                messages=p_m
             )['token_count']
         else:
             return num_tokens_from_messages(messages, self.model)
@@ -223,10 +236,16 @@ class Conversation:
             n = len(self.history)+1
         labels = {
             'gpt-4': 'GPT-4',
+            'gpt-4-1106-preview': 'GPT-4 Turbo',
             'gpt-3.5-turbo': 'GPT-3',
-            'models/chat-bison-001': 'Bison'
+            'models/chat-bison-001': 'Bison',
+            'models/chat-unicorn-001': 'Unicorn'
         }
-        return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{labels[self.model]}[/] '
+        if self.model in labels:
+            return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{labels[self.model]}[/] '
+        else:
+            return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{self.model}[/] '
+
 
     def messages_string(self, messages, divider=' '):
         strings = []
@@ -256,7 +275,8 @@ class Conversation:
 
     def print_systems(self):
         for n, m in enumerate(self.messages):
-            self.__print_message(n, m)
+            if m['role'] == 'system':
+                self.__print_message(n, m)
     
     def print_messages(self, first=None, last=None):
         l = len(self.history)
@@ -287,7 +307,10 @@ class Conversation:
         answer = chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result)
         answer_list = [{"role": "assistant", "content": answer}]
         cost = self.__num_tokens() + self.__num_tokens(answer_list)*2 # prompt cost + 2 x response cost
-        cost *= MODEL_COST[self.model]
+        if self.model in MODEL_COST:
+            cost *= MODEL_COST[self.model]
+        else:
+            cost *= (0.001 / 1000) # Guess cost for unknown models
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
         return answer, cost

@@ -222,10 +222,14 @@ def history_command(chat, *_):
 def save_command(chat, filename, *_):
     """Save the chat to `filename`. Automatically adds file extension and names the file if `filename` is not specified."""
     if filename:
-        chat.save(filename)
-        console.print(f"Data saved to {filename}")
+        if '/' in filename:
+            file = filename
+        else:
+            file = f'{CHAT_FOLDER}/{filename}'
     else:
-        chat.save(create_filename())
+        file = create_filename()
+    chat.save(file)
+    console.print(f"Data saved to {file}")
 
 def load_command(chat, filename, *_):
     """Load the chat from `filename`. Loads the latest file if `filename` is a bot name or the exact file if it's a filename."""
@@ -238,7 +242,13 @@ def load_command(chat, filename, *_):
             else:
                 chat.load(f'{CHAT_FOLDER}/{filename}')
         else:
-            load_latest(filename)
+            if filename in ALL_BOTS:
+                load_latest(filename)
+            else:
+                if '/' in filename:
+                    chat.load(filename)
+                else:
+                    chat.load(f'{CHAT_FOLDER}/{filename}')
     else:
         console.print('Error: No filename specified')
 
@@ -246,10 +256,16 @@ def model_command(chat, model, reset):
     """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-3.5', 'gpt-4', or 'bison' or an abbreviation like '3', '4', or 'b'. If `reset` is 'r' or 'redo', the last message is regenerated with the new model."""
     if model in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
         chat.model = 'gpt-3.5-turbo'
-    elif model in ['4', 'gpt-4']:
+    elif model in ['4', 'gpt-4-turbo']:
+        chat.model = 'gpt-4-1106-preview'
+    elif model in ['gpt-4']:
         chat.model = 'gpt-4'
     elif model in ['2', 'b', 'palm', 'bison', 'models/chat-bison-001']:
         chat.model = 'models/chat-bison-001'
+    elif model in ['u', 'unicorn', 'models/chat-unicorn-001']:
+        chat.model = 'models/chat-unicorn-001'
+    else:
+        chat.model = model
 
     if reset in ['r', 'redo', 'reset']:
         user_message = chat.messages[-2]['content']
@@ -350,7 +366,7 @@ def paste_command(_, *text):
     user_input = pyperclip.paste()
     text = [w for w in text if w is not None]
     if text: # Prepend everything after !p
-        user_input = ' '.join(text) + '\n' + user_input
+        user_input = ' '.join(text) + '\n\n' + user_input
     console.print(user_input)
     return user_input
 

@@ -38,7 +38,8 @@ MODEL_COST = {
     # 'models/chat-bison-001': 0.001 / 1000 # ??? this is wrong 5/16/23
 }
 # MODEL = "gpt-3.5-turbo" # Cheaper
-MODEL = "gpt-4" # Better
+# MODEL = "gpt-4" # Better
+MODEL = "gpt-4-1106-preview" # Cheaper, Faster (?) GPT-4
 # MODEL = 'models/chat-bison-001' # PaLM 2
 STREAM = True
 API_TRIES = 3
@@ -87,7 +88,7 @@ def palm_messages(messages):
         for m in messages if m['role'] != 'system'
     ]
 
-def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
+def chat_complete(openai_messages, model=MODEL, temperature=0.8, print_result=True):
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
             if model.startswith('models/'): # PaLM
@@ -115,7 +116,6 @@ def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None
                     model=model,
                     messages=openai_messages,
                     temperature=temperature,
-                    max_tokens=max_tokens,
                     user=USER_ID,
                     stream=(STREAM and print_result)
                 )
@@ -236,6 +236,7 @@ class Conversation:
             n = len(self.history)+1
         labels = {
             'gpt-4': 'GPT-4',
+            'gpt-4-32k': 'GPT-4 32k',
             'gpt-4-1106-preview': 'GPT-4 Turbo',
             'gpt-3.5-turbo': 'GPT-3',
             'models/chat-bison-001': 'Bison',
@@ -304,7 +305,7 @@ class Conversation:
         if prefix:
             console.print(prefix)
 
-        answer = chat_complete(messages, max_tokens=self.max_tokens, model=self.model, print_result=print_result)
+        answer = chat_complete(messages, model=self.model, print_result=print_result)
         answer_list = [{"role": "assistant", "content": answer}]
         cost = self.__num_tokens() + self.__num_tokens(answer_list)*2 # prompt cost + 2 x response cost
         if self.model in MODEL_COST:

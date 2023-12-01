@@ -260,6 +260,8 @@ def model_command(chat, model, reset):
         chat.model = 'gpt-4-1106-preview'
     elif model in ['gpt-4']:
         chat.model = 'gpt-4'
+    elif model in ['32', '32k']:
+        chat.model = 'gpt-4-32k'
     elif model in ['2', 'b', 'palm', 'bison', 'models/chat-bison-001']:
         chat.model = 'models/chat-bison-001'
     elif model in ['u', 'unicorn', 'models/chat-unicorn-001']:

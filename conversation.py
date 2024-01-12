@@ -1,10 +1,13 @@
 from datetime import datetime
 import os
 import time
+import re
+import base64
 
 import openai
 import tiktoken
-import google.generativeai as palm
+import google.generativeai as genai
+from PIL import Image
 
 import files
 import console
@@ -23,19 +26,25 @@ DEBUG = False
 
 MONEY = True # Print money conversion in token warning
 MODEL_COST = {
-    # https://openai.com/pricing
-    'gpt-3.5-turbo': 0.001 / 1000,  # $0.001 / 1K tokens 11/30/23
-    'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 11/30/23
-    'gpt-4-32k': 0.06 / 1000,       # $0.06 / 1K tokens 11/30/23
-    'gpt-4-1106-preview': 0.01 / 1000, # $0.01 / 1K tokens 11/30/23
-    'gpt-4-turbo': 0.01 / 1000,     # $0.01 / 1K tokens 11/30/23
-    # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
-    'models/chat-bison-001': 0.0005 / 1000, # $0.0005 / 1K characters 11/30/23
-    'models/chat-unicorn-001': 0.0025 / 1000 # $0.0025 / 1K characters 11/30/23
-    # Old prices
-    # 'gpt-3.5-turbo': 0.002 / 1000,  # $0.002 / 1K tokens 4/6/23
-    # 'gpt-4': 0.03 / 1000,           # $0.03 / 1K tokens 4/6/23
-    # 'models/chat-bison-001': 0.001 / 1000 # ??? this is wrong 5/16/23
+    k:
+        (a/250, b/250)
+        if k.startswith('models/') # per character
+        else (a/1000, b/1000) # per token
+    for k, a, b in [
+        # https://openai.com/pricing
+        ('gpt-3.5-turbo', 0.001, 0.002),
+        ('gpt-4', 0.03, 0.06),
+        ('gpt-4-32k', 0.06, 0.12),
+        ('gpt-4-1106-preview', 0.01, 0.03),
+        ('gpt-4-vision-preview', 0.01, 0.03),
+        ('gpt-4-turbo', 0.01, 0.03),
+        # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
+        ('models/chat-bison-001', 0.00025, 0.0005),
+        ('models/chat-unicorn-001', 0.0025, 0.0075),
+        ('models/gemini-pro', 0.00025, 0.0005),
+        ('models/gemini-pro-vision', 0.00025, 0.0005),
+        ('unknown', 0.001, 0.002)
+    ]
 }
 # MODEL = "gpt-3.5-turbo" # Cheaper
 # MODEL = "gpt-4" # Better
@@ -52,7 +61,11 @@ except Exception:
     USER_ID = 'unknown'
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
-palm.configure(api_key=os.environ["PALM_API_KEY"])
+
+if "GOOGLE_API_KEY" in os.environ:
+    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+else:
+    genai.configure(api_key=os.environ["PALM_API_KEY"])
 
 
 
@@ -65,7 +78,23 @@ palm.configure(api_key=os.environ["PALM_API_KEY"])
 ##       ##     ## ##   ### ##    ##    ##     ##  ##     ## ##   ### ##    ##
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
-def num_tokens_from_messages(messages, model=MODEL):
+def num_tokens_gemini(messages, model=MODEL):
+    """Returns the number of tokens used by a list of messages."""
+    return sum(len(m['content']) // 4 for m in messages)
+    # llm_model = genai.GenerativeModel(model)
+    # return llm_model.count_tokens(gemini_messages(messages))
+
+def num_tokens_palm(messages, model=MODEL):
+    p_m = palm_messages(messages)
+    if len(p_m) == 0:
+        return 0
+    return genai.count_message_tokens(
+        model=model,
+        context=messages[0]['content'],
+        messages=p_m
+    )['token_count']
+
+def num_tokens_openai(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages. Copied from OpenAI example"""
     encoding = tiktoken.encoding_for_model(model)
     num_tokens = 0
@@ -78,9 +107,42 @@ def num_tokens_from_messages(messages, model=MODEL):
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
 
-def chunks_from_response(response):
+def chunks_from_gemini(response):
     for chunk in response:
-        yield chunk['choices'][0]['delta'].get('content', '')
+        yield chunk.text if chunk.parts.pb else ''
+        
+def chunks_from_openai(response):
+    for chunk in response:
+        content = chunk.choices[0].delta.content
+        yield content if content else ''
+
+def gemini_messages(messages):
+    new_roles = {
+        'system': 'user',
+        'assistant': 'model',
+        'user': 'user'
+    }
+
+    formatted_messages = []
+    for m in messages:
+        parts = []
+        img_match = re.match(r'^image: (\S*)\s*(.*)', m['content'])
+        if img_match:
+            url = img_match.group(1)
+            if not url.startswith('http'): # It's a local file,
+                img = Image.open(url)
+                # llm_messages[-1]['parts'] = [img_match.group(2), img]
+                parts = [img_match.group(2), img]
+                # llm_messages = llm_messages[-1:] # Only one message supported by vision
+        else:
+            parts = [ m['content'] ]
+        new = {
+            'role': new_roles[ m['role'] ],
+            'parts': parts
+        }
+        formatted_messages.append(new)
+    # return formatted_messages
+    return formatted_messages[-1:] # Multiturn (chat) not yet supported by Gemini Vision
 
 def palm_messages(messages):
     return [
@@ -88,44 +150,109 @@ def palm_messages(messages):
         for m in messages if m['role'] != 'system'
     ]
 
-def chat_complete(openai_messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
+def openai_messages(messages):
+    formatted_messages = []
+    for m in messages:
+        img_match = re.match(r'^image: (\S*)\s*(.*)', m['content'])
+        if img_match:
+            url = img_match.group(1)
+            if not url.startswith('http'): # It's a local file,
+                with open(url, "rb") as image_file:
+                    base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                url = f"data:image/jpeg;base64,{base64_image}"
+            
+            new = {
+                'role': m['role'],
+                'content': [
+                    {"type": "text", "text": img_match.group(2)},
+                    {"type": "image_url", "image_url": {"url": url, "detail": "auto"}}
+                ]
+            }
+            formatted_messages.append(new)
+        else:
+            formatted_messages.append(m)
+    return formatted_messages
+
+def chat_gemini(messages, model, temperature, max_tokens, stream):
+    # user_text = messages[-1]['content']
+    llm_model = genai.GenerativeModel(model)
+    config = genai.types.GenerationConfig(temperature=temperature)
+    safety = [ # Dangerous mode
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        }
+    ]
+    if max_tokens:
+        config.max_output_tokens = max_tokens
+    llm_messages = gemini_messages(messages)
+
+    with console.status('Getting response from Google...'):
+        response = llm_model.generate_content(
+            llm_messages,
+            generation_config=config,
+            safety_settings=safety,
+            stream=stream
+        )
+    if stream:
+        return console.print_stream(chunks_from_gemini(response)), True
+    else:
+        return response.text, False
+
+def chat_palm(messages, model, temperature):
+    with console.status('Getting response from Google...'):
+        response = genai.chat(
+            model=model,
+            context=messages[0]['content'],
+            messages=palm_messages(messages),
+            temperature=temperature
+        )
+    return response.last, False
+
+def chat_openai(messages, model, temperature, max_tokens, stream):
+    llm_messages = openai_messages(messages)
+    kwargs = {
+        'model': model,
+        'messages': llm_messages,
+        'temperature': temperature,
+        'user': USER_ID,
+        'stream': stream
+    }
+    if max_tokens: kwargs['max_tokens'] = max_tokens
+    with console.status('Getting response from OpenAI...'):
+        # response = openai.ChatCompletion.create(**kwargs)
+        response = openai.chat.completions.create(**kwargs) # New syntax
+    if stream:
+        return console.print_stream(chunks_from_openai(response)), True
+    else:
+        return response.choices[0].message.content, False
+
+def chat_complete(messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
-            if model.startswith('models/'): # PaLM
-                if print_result:
-                    with console.status('Getting response from Google...'):
-                        response = palm.chat(
-                            model=model,
-                            context=openai_messages[0]['content'],
-                            messages=palm_messages(openai_messages),
-                            temperature=temperature
-                        )
-                else:
-                    response = palm.chat(
-                        model=model,
-                        context=openai_messages[0]['content'],
-                        messages=palm_messages(openai_messages),
-                        temperature=temperature
-                    )
-                full_string = response.last
-                if print_result:
-                    console.print_markdown(full_string)
-                return full_string
-            else:
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=openai_messages,
-                    temperature=temperature,
-                    user=USER_ID,
-                    stream=(STREAM and print_result)
-                )
-                if STREAM and print_result:
-                    return console.print_stream(chunks_from_response(response))
-                else:
-                    full_string = response['choices'][0]['message']['content']
-                    if print_result:
-                        console.print_markdown(full_string)
-                    return full_string
+            stream = (STREAM and print_result)
+            if model.startswith('models/gemini'): # Gemini
+                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream)
+            elif model.startswith('models/'): # PaLM
+                response, printed = chat_palm(messages, model, temperature)
+            else: # OpenAI
+                response, printed = chat_openai(messages, model, temperature, max_tokens, stream)
+
+            if not printed:
+                console.print_markdown(response)
+            return response
         except Exception as e:
             console.print(f"Error: {e}\nTrying again in {1} second...\n")
             time.sleep(1)
@@ -177,7 +304,9 @@ class Conversation:
         self.reset(filename=filename, system=system)
 
     def reset(self, filename=None, system=None, ai=None):
-        self.max_tokens = 8000
+        self.max_tokens = None
+
+        self.max_chat_tokens = 8000
         self.token_warning = 4000
         self.cost = 0
 
@@ -215,16 +344,12 @@ class Conversation:
     def __num_tokens(self, messages=None):
         if messages == None:
             messages = self.messages
-        if self.model.startswith('models/'): # PaLM
-            p_m = palm_messages(messages)
-            if len(p_m) == 0:
-                return 0
-            return palm.count_message_tokens(
-                context=messages[0]['content'],
-                messages=p_m
-            )['token_count']
+        if self.model.startswith('models/gemini'):
+            return num_tokens_gemini(messages, self.model)
+        elif self.model.startswith('models/'):
+            return num_tokens_palm(messages, self.model)
         else:
-            return num_tokens_from_messages(messages, self.model)
+            return num_tokens_openai(messages, self.model)
 
     def user_prefix(self, n=None):
         if n is None:
@@ -238,9 +363,12 @@ class Conversation:
             'gpt-4': 'GPT-4',
             'gpt-4-32k': 'GPT-4 32k',
             'gpt-4-1106-preview': 'GPT-4 Turbo',
+            'gpt-4-vision-preview': 'GPT-4 Vision',
             'gpt-3.5-turbo': 'GPT-3',
             'models/chat-bison-001': 'Bison',
-            'models/chat-unicorn-001': 'Unicorn'
+            'models/chat-unicorn-001': 'Unicorn',
+            'models/gemini-pro': 'Gemini',
+            'models/gemini-pro-vision': 'Gemini Vision'
         }
         if self.model in labels:
             return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{labels[self.model]}[/] '
@@ -305,13 +433,14 @@ class Conversation:
         if prefix:
             console.print(prefix)
 
-        answer = chat_complete(messages, model=self.model, print_result=print_result)
+        answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result)
         answer_list = [{"role": "assistant", "content": answer}]
-        cost = self.__num_tokens() + self.__num_tokens(answer_list)*2 # prompt cost + 2 x response cost
+
         if self.model in MODEL_COST:
-            cost *= MODEL_COST[self.model]
+            in_cost, out_cost = MODEL_COST[self.model]
         else:
-            cost *= (0.001 / 1000) # Guess cost for unknown models
+            in_cost, out_cost = MODEL_COST['unknown'] # Guess cost for unknown models
+        cost = self.__num_tokens()*in_cost + self.__num_tokens(answer_list)*out_cost # prompt cost + response cost
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
         return answer, cost
@@ -325,12 +454,12 @@ class Conversation:
         total_tokens = self.__num_tokens()
         # Summarize or forget if approaching token limit
         summary_cost = 0
-        if self.summarize and total_tokens > self.max_tokens:
+        if self.summarize and total_tokens > self.max_chat_tokens:
             with console.status('Consolidating memory...'):
                 _, summary_cost = self.summarize_messages(self.summarize_len, delete=True)
 
         else: # If self.summarize = False, just forget oldest messages
-            while self.__num_tokens() > self.max_tokens:
+            while self.__num_tokens() > self.max_chat_tokens:
                 last = self.messages[1]['content']
                 if DEBUG: console.log(f'<Forgetting: {last}>')
                 del self.messages[1]
@@ -339,7 +468,13 @@ class Conversation:
         self.messages.append(message)
         self.history.append(message)
 
-        answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix())
+        try:
+            answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix())
+        except ConnectionError as e:
+            console.print(str(e)+'\n')
+            self.messages.pop()
+            self.history.pop()
+            return False
 
         message = { "role": "assistant", "content": answer }
         self.messages.append(message)
@@ -363,6 +498,8 @@ class Conversation:
             console.print(f'{cost_string} {time_string} - Consider restarting conversation\n', justify='center')
         elif MONEY:
             console.print(f'{cost_string} {time_string}\n', justify='center')
+
+        return True
 
     def summarize_messages(self, n=5000, delete=False):
         """Summarize the first n tokens worth of conversation. Default n > 4096 means summarize everything"""

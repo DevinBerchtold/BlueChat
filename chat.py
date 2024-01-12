@@ -4,8 +4,10 @@ import threading
 import time
 import re
 import inspect
+import random
 
 import pyperclip
+from PIL import ImageGrab, Image
 
 import files
 import console
@@ -96,7 +98,11 @@ def filename_num(filename):
 
 def latest_file_today(string):
     all = os.listdir(CHAT_FOLDER)
-    chat_files = [f.split('.')[0] for f in all if f.startswith(f'{string}_{DATE}')]
+    chat_files = [
+        f.split('.')[0] for f in all # Filename without extension
+        if f.startswith(f'{string}_{DATE}') # Match the prefix
+        and f.count('_') <= 2 # Exclude images and other files
+    ]
 
     if chat_files:
         return f'{CHAT_FOLDER}/{max(chat_files, key=filename_num)}'
@@ -253,11 +259,14 @@ def load_command(chat, filename, *_):
         console.print('Error: No filename specified')
 
 def model_command(chat, model, reset):
-    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-3.5', 'gpt-4', or 'bison' or an abbreviation like '3', '4', or 'b'. If `reset` is 'r' or 'redo', the last message is regenerated with the new model."""
-    if model in ['3', '3.5', 'gpt-3', 'gpt-3.5-turbo']:
+    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-3.5', 'gpt-4', or 'gemini'. Abbreviations like '3', '4', or 'b' are also accepted. If `reset` is 'r' or 'redo', the last message is regenerated with the new model."""
+    if model in ['3', '3.5', 'gpt-3']:
         chat.model = 'gpt-3.5-turbo'
     elif model in ['4', 'gpt-4-turbo']:
-        chat.model = 'gpt-4-1106-preview'
+        if chat.model == 'models/gemini-pro-vision':
+            chat.model = 'gpt-4-vision-preview'
+        else:
+            chat.model = 'gpt-4-1106-preview'
     elif model in ['gpt-4']:
         chat.model = 'gpt-4'
     elif model in ['32', '32k']:
@@ -266,6 +275,11 @@ def model_command(chat, model, reset):
         chat.model = 'models/chat-bison-001'
     elif model in ['u', 'unicorn', 'models/chat-unicorn-001']:
         chat.model = 'models/chat-unicorn-001'
+    elif model in ['g', 'gemini', 'gemini-pro']:
+        if chat.model == 'gpt-4-vision-preview':
+            chat.model = 'models/gemini-pro-vision'
+        else:
+            chat.model = 'models/gemini-pro'
     else:
         chat.model = model
 
@@ -366,10 +380,37 @@ def copy_command(chat, parm, *_):
 def paste_command(_, *text):
     """Paste the clipboard content and send as a message. If `text` is specified, `text` is prepended to the message before sending."""
     user_input = pyperclip.paste()
+    console.print(user_input+'\n')
     text = [w for w in text if w is not None]
     if text: # Prepend everything after !p
         user_input = ' '.join(text) + '\n\n' + user_input
-    console.print(user_input)
+    return user_input
+
+def image_command(_, *text):
+    """Attach an image or image URL from the clipboard. If `text` is specified, `text` is included with the message."""
+    img = ImageGrab.grabclipboard()
+    if isinstance(img, Image.Image): # Image on clipboard
+        alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        random_id = ''.join(random.choice(alpha) for _ in range(4))
+        url = create_filename()+f'_{random_id}.png'
+        img.save(url) # Save it to disk
+        w, h = img.size
+        print(f'Clipboard image: {url} ({w}x{h})\n')
+    else: # Text on clipboard
+        url = pyperclip.paste()
+        print(f'Clipboard text: {url}\n')
+    
+    # Use vision model
+    if chat.model.startswith('models/'): # Gemini
+        chat.model = 'models/gemini-pro-vision'
+    else: # GPT-4
+        chat.model = 'gpt-4-vision-preview'
+        chat.max_tokens = 1000
+
+    user_input = 'image: ' + url
+    if text:
+        text = [w for w in text if w is not None]
+        user_input += '\n\n' + ' '.join(text)
     return user_input
 
 def exit_command(*_):
@@ -392,7 +433,8 @@ COMMANDS = (
     ('auto', 'a'),
     ('variable', 'v', 'var'),
     ('copy', 'c'),
-    ('paste', 'p')
+    ('paste', 'p'),
+    ('image', 'i')
 )
 
 def help_command(*_):
@@ -422,6 +464,8 @@ def help_command(*_):
         doc_replaced = re.sub(r'`(.*?)`', r'[od.yellow]\1[/]', doc) # Highlight `parms`
 
         help_strings.append(f'{names}[bold][od.yellow]{parm_string}[/][/]: {doc_replaced}')
+
+    help_strings.append("""Any text that is not prepended with an exclamation point '!' (indicating that it is a command) will be forwarded to the AI and processed as part of the conversation.""")
     console.print_columns(help_strings)
     console.print('')
 
@@ -490,7 +534,7 @@ if __name__ == '__main__':
                 FIRST_MESSAGE = False # Just loaded, don't switch context right away
                 load_latest(command, reset=True)
 
-        if user_input and not user_input.startswith('!'): # !p and !a can change user_input
+        if user_input and not user_input.startswith('!'): # Some commands change user_input
             if SWITCH and FIRST_MESSAGE:
                 with console.status('Checking context...'):
                     switch = switch_context(user_input)
@@ -499,7 +543,7 @@ if __name__ == '__main__':
 
             FIRST_MESSAGE = False
 
-            chat.get_dialogue(user_input)
+            success = chat.get_dialogue(user_input)
 
-            if AUTOSAVE:
+            if success and AUTOSAVE:
                 chat.save(create_filename())

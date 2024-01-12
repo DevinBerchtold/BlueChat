@@ -1,7 +1,8 @@
-# pip install -r requirements.txt
+# pip install --upgrade -r requirements.txt
 openai
 tiktoken
 google.generativeai
 rich
 pyperclip
 pyyaml
+Pillow

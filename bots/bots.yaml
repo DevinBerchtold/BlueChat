@@ -1,5 +1,6 @@
-variables: {FILENAME: help, SWITCH: true}
-bots:
+variables: {FILENAME: blue, SWITCH: true}
+bots: 
+  blue: Anything that doesn't fit in the other categories.
   fact: Gives encyclopedia entries for things and ideas.
   dictionary: Gives definitions for words and slang.
   thesaurus: Gives synonyms and antonyms to words.
@@ -12,4 +13,3 @@ bots:
   creative: Provides assistance on creative tasks.
   lawyer: Answers questions related to the law.
   tax: Provides assistance on taxes.
-  help: All other questions.

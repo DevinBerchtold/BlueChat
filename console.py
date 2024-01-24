@@ -73,8 +73,8 @@ if RICH:
         "od.orange_dim": od_orange_dim,
         # others
         "rule.line": od_yellow,
-        "user_label": od_blue+' bold',
-        "ai_label": od_red+' bold',
+        "user_label": od_red+' bold',
+        "ai_label": od_blue+' bold',
         "markdown.item.number": od_yellow+' bold',
         "markdown.item.bullet": od_yellow+' bold',
         "markdown.hr": od_yellow,

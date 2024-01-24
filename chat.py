@@ -9,6 +9,11 @@ import random
 import pyperclip
 from PIL import ImageGrab, Image
 
+from selenium import webdriver
+from bs4 import BeautifulSoup
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+
 import files
 import console
 import conversation
@@ -102,6 +107,7 @@ def latest_file_today(string):
         f.split('.')[0] for f in all # Filename without extension
         if f.startswith(f'{string}_{DATE}') # Match the prefix
         and f.count('_') <= 2 # Exclude images and other files
+        and '(' not in f and ')' not in f
     ]
 
     if chat_files:
@@ -151,7 +157,7 @@ def switch_context(user_input):
         if assistant.startswith(bot) or assistant.startswith(f"'{bot}'") or assistant.startswith(f"\"{bot}\""):
             if DEBUG: console.log(f'Assistant {create_filename()} (moderate certainty, string startswith bot)')
             return bot
-        
+
     for bot in BOTS: # bot is anywhere in the string
         if bot in assistant:
             if DEBUG: console.log(f'Assistant {create_filename()} (low certainty, bot in string)')
@@ -259,7 +265,7 @@ def load_command(chat, filename, *_):
         console.print('Error: No filename specified')
 
 def model_command(chat, model, reset):
-    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-3.5', 'gpt-4', or 'gemini'. Abbreviations like '3', '4', or 'b' are also accepted. If `reset` is 'r' or 'redo', the last message is regenerated with the new model."""
+    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*b*ison'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
     if model in ['3', '3.5', 'gpt-3']:
         chat.model = 'gpt-3.5-turbo'
     elif model in ['4', 'gpt-4-turbo']:
@@ -280,10 +286,10 @@ def model_command(chat, model, reset):
             chat.model = 'models/gemini-pro-vision'
         else:
             chat.model = 'models/gemini-pro'
-    else:
+    elif model:
         chat.model = model
 
-    if reset in ['r', 'redo', 'reset']:
+    if reset in ('redo', 'r'):
         user_message = chat.messages[-2]['content']
         if len(chat.messages) >= 2:
             chat.messages = chat.messages[:-2]
@@ -358,12 +364,12 @@ def variable_command(chat, parm, *_):
         chat.print_vars()
 
 def copy_command(chat, parm, *_):
-    """Copy the last `parm` chat messages to the clipboard if `parm` is a number or 'all'. Copy code blocks from the last message if `parm` is 'code'. Copies 2 messages by default."""
+    """Copy the last `parm` chat messages to the clipboard if `parm` is a number or '*a*ll'. Copy code blocks from the last message if `parm` is '*c*ode'. Copies 2 messages by default."""
     n = None
     if parm:
-        if parm == 'all':
+        if parm in ('all', 'a'):
             n = len(chat.messages)
-        elif parm == 'code':
+        elif parm in ('code', 'c'):
             text = chat.messages[-1]['content']
             pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
             matches = re.findall(pattern, text)
@@ -386,86 +392,134 @@ def paste_command(_, *text):
         user_input = ' '.join(text) + '\n\n' + user_input
     return user_input
 
+def image_name():
+    alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    random_id = ''.join(random.choice(alpha) for _ in range(4))
+    return create_filename()+f'_{random_id}.png'
+
 def image_command(_, *text):
     """Attach an image or image URL from the clipboard. If `text` is specified, `text` is included with the message."""
     img = ImageGrab.grabclipboard()
     if isinstance(img, Image.Image): # Image on clipboard
-        alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        random_id = ''.join(random.choice(alpha) for _ in range(4))
-        url = create_filename()+f'_{random_id}.png'
-        img.save(url) # Save it to disk
+        file = image_name()
+        img.save(file) # Save it to disk
         w, h = img.size
-        print(f'Clipboard image: {url} ({w}x{h})\n')
+        img_string = f'image: {file} ({w}x{h})'
     else: # Text on clipboard
-        url = pyperclip.paste()
-        print(f'Clipboard text: {url}\n')
-    
+        img_string = f'image: {pyperclip.paste()}'
+
+    print(f'Clipboard {img_string}\n')
+
     # Use vision model
     if chat.model.startswith('models/'): # Gemini
         chat.model = 'models/gemini-pro-vision'
     else: # GPT-4
         chat.model = 'gpt-4-vision-preview'
-        chat.max_tokens = 1000
 
-    user_input = 'image: ' + url
+    user_input = img_string
     if text:
         text = [w for w in text if w is not None]
         user_input += '\n\n' + ' '.join(text)
     return user_input
+
+def web_command(_, *text):
+    """Attach a website URL from the clipboard to send. If `text` is specified, `text` is included with the message."""
+    url = pyperclip.paste()
+    if not url.startswith('http'):
+        return None
+    with console.status('Starting browser...'):
+        w = str(int(768*1.25))
+        h = str(int(1024*1.25))
+
+        # Setup Selenium WebDriver with headless option
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--log-level=3')
+        options.add_argument('--disable-gpu')  # Sometimes needed if running on Windows
+        options.add_argument(f'--window-size={w},{h}')
+        options.add_experimental_option('excludeSwitches',['enable-logging'])
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+    
+    with console.status('Retrieving webpage...'):
+        driver.get(url)
+
+        parts = []
+
+        type = 'b'
+        if type in ('i', 'b', None):
+            file = image_name()
+            driver.save_screenshot(file)
+            parts += [f'image: {file} ({w}x{h})']
+
+            # Use vision model
+            if chat.model.startswith('models/'): # Gemini
+                chat.model = 'models/gemini-pro-vision'
+            else: # GPT-4
+                chat.model = 'gpt-4-vision-preview'
+
+        if text:
+            text = [w for w in text if w is not None]
+            parts += [' '.join(text)]
+
+        if type in ('t', 'b', None):
+            page_source = driver.page_source
+            soup = BeautifulSoup(page_source, 'html.parser')
+            page_text = soup.get_text(separator='\n', strip=True)
+            parts += [page_text]
+
+        driver.quit()
+        if DEBUG: console.print(parts)
+    return '\n\n'.join(parts)
 
 def exit_command(*_):
     """Exit the application."""
     console.print('Goodbye')
     sys.exit()
 
-COMMANDS = (
-    ('help', 'h'),
-    ('exit', 'e', 'x', 'quit', 'q'),
-    ('restart', 'r'),
-    ('undo', 'u', 'redo'),
-    ('summary', 'sum'),
-    ('history', 'hi', 'messages', 'me', 'print', 'pr'),
-    ('save', 's'),
-    ('load', 'l'),
-    ('model', 'm'),
-    ('translate', 't'),
-    ('debug', 'd'),
-    ('auto', 'a'),
-    ('variable', 'v', 'var'),
-    ('copy', 'c'),
-    ('paste', 'p'),
-    ('image', 'i')
+COMMAND_LIST = (
+    'help', 'exit', 'restart', 'undo', 'save', 'load', 'summary', 'history', 'model', 'translate', 'debug', 'auto', 'variable', 'copy', 'paste', 'image', 'web'
 )
+ALL_COMMANDS = {}
+
+def command_pairs(commands):
+    best_prefixes = []
+    for command in commands:
+        searching = True
+        prefix = ''
+        for c in command:
+            prefix += c
+            if prefix not in ALL_COMMANDS:
+                ALL_COMMANDS[prefix] = command
+                if searching:
+                    best_prefixes.append((command, prefix))
+                    searching = False
+    return best_prefixes
+
+COMMANDS = []
+COMMANDS = command_pairs(COMMAND_LIST)
+BOT_COMMANDS = command_pairs(BOTS)
+BOT_COMMANDS.extend(command_pairs(b for b in ALL_BOTS if b not in BOTS))
 
 def help_command(*_):
     """Print the help screen."""
+    def cmd_text(c):
+        return f'[bold][od.cyan]!{c[1]}[/]{c[0][len(c[1]):]}[/]'
     help_strings = []
     for cmds in COMMANDS:
-        n = len(cmds)
-        name_list = []
-        skip = False
-        for i, c in enumerate(cmds):
-            if skip: skip = False
-            else: # Command n+1 might be alias for command n
-                if i < n-1 and c.startswith(cmds[i+1]):
-                    name_list.append(f'[bold][od.cyan]!{cmds[i+1]}[/]{c[len(cmds[i+1]):]}[/]')
-                    skip = True # Skip the next one
-                else:
-                    name_list.append(f'[bold]!{c}[/]')
-        names = '[od.dim]|[/]'.join(name_list)
         func = globals()[f'{cmds[0]}_command']
-        doc = func.__doc__
+        if doc := func.__doc__:
+            # Create command parms from function arguments
+            parms = inspect.signature(func).parameters
+            parm_string = ''.join(' ' + p for p in parms if p not in ('chat', '_'))
+            doc = re.sub(r'`(.*?)`', r'[od.yellow]\1[/]', doc) # Highlight `parms`
+            doc = re.sub(r'\*(.*?)\*', r'[od.cyan]\1[/]', doc) # Highlight *a*bbreviations
 
-        # Create command parms from function arguments
-        parms = inspect.signature(func).parameters
-        parms = [p for p in parms if p not in ('chat', '_')]
-        if parms: parm_string = ' '+' '.join(parms)
-        else: parm_string = ''
-        doc_replaced = re.sub(r'`(.*?)`', r'[od.yellow]\1[/]', doc) # Highlight `parms`
+            help_strings.append(f'{cmd_text(cmds)}[bold][od.yellow]{parm_string}[/][/]: {doc}')
 
-        help_strings.append(f'{names}[bold][od.yellow]{parm_string}[/][/]: {doc_replaced}')
-
-    help_strings.append("""Any text that is not prepended with an exclamation point '!' (indicating that it is a command) will be forwarded to the AI and processed as part of the conversation.""")
+    bots = ' '.join(cmd_text(cmds) for cmds in BOT_COMMANDS)
+    help_strings.append(f"{bots}: Load the corresponding bot and start a new conversation.")
+    help_strings.append("""Any text without an exclamation point '!' (indicating that it is a command) will be processed as part of the conversation.""")
     console.print_columns(help_strings)
     console.print('')
 
@@ -520,7 +574,7 @@ if __name__ == '__main__':
             continue
         elif user_input.startswith('!'):
             words = user_input[1:].split(' ') # remove ! and split
-            command = words[0]
+            command = ALL_COMMANDS[words[0]]
             args = words[1:]
             if len(args) < 2: # All commands take 2 optional arguments (for now)
                 args += [None] * (2-len(args)) # Extend to minimum length

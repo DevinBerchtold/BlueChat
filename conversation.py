@@ -3,6 +3,7 @@ import os
 import time
 import re
 import base64
+from math import ceil
 
 import openai
 import tiktoken
@@ -94,11 +95,26 @@ def num_tokens_palm(messages, model=MODEL):
         messages=p_m
     )['token_count']
 
+def image_tokens_openai(w, h, detail='auto'):
+    if detail == 'low' or not w or not h:
+        return 85
+    if max(w, h) > 2048: # Fit within a 2048 x 2048 square
+        r = 2048.0 / max(w, h)
+        w, h = w * r, h * r
+    if min(w, h) > 768: # Max of 768px on the shortest side
+        r = 768.0 / min(w, h)
+        w, h = w * r, h * r
+    return 85 + ( 170 * ceil(w / 512) * ceil(h / 512) )
+
+image_pattern = re.compile(r'^image: (\S+) ?\(?(\d*)?x?(\d*)?\)?\s*(.*)')
+
 def num_tokens_openai(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages. Copied from OpenAI example"""
     encoding = tiktoken.encoding_for_model(model)
     num_tokens = 0
     for message in messages:
+        if match := image_pattern.match(message['content']):
+            num_tokens += image_tokens_openai(int(match.group(2)), int(match.group(3)))
         num_tokens += 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
         for key, value in message.items():
             num_tokens += len(encoding.encode(value))
@@ -110,7 +126,7 @@ def num_tokens_openai(messages, model=MODEL):
 def chunks_from_gemini(response):
     for chunk in response:
         yield chunk.text if chunk.parts.pb else ''
-        
+
 def chunks_from_openai(response):
     for chunk in response:
         content = chunk.choices[0].delta.content
@@ -118,31 +134,33 @@ def chunks_from_openai(response):
 
 def gemini_messages(messages):
     new_roles = {
-        'system': 'user',
+        # 'system': 'user',
         'assistant': 'model',
         'user': 'user'
     }
 
     formatted_messages = []
     for m in messages:
-        parts = []
-        img_match = re.match(r'^image: (\S*)\s*(.*)', m['content'])
-        if img_match:
-            url = img_match.group(1)
-            if not url.startswith('http'): # It's a local file,
-                img = Image.open(url)
-                # llm_messages[-1]['parts'] = [img_match.group(2), img]
-                parts = [img_match.group(2), img]
-                # llm_messages = llm_messages[-1:] # Only one message supported by vision
+        if match := image_pattern.match(m['content']):
+            file, _, _, text = match.groups()
+            try: # It's a local file,
+                img = Image.open(file)
+                if text:
+                    parts = [text, img]
+                else:
+                    parts = [img]
+
+            except OSError as e:
+                console.print(e)
+                parts = [ m['content'] ]
         else:
             parts = [ m['content'] ]
-        new = {
-            'role': new_roles[ m['role'] ],
-            'parts': parts
-        }
-        formatted_messages.append(new)
-    # return formatted_messages
-    return formatted_messages[-1:] # Multiturn (chat) not yet supported by Gemini Vision
+        if m['role'] in new_roles:
+            formatted_messages.append({
+                'role': new_roles[ m['role'] ],
+                'parts': parts
+            })
+    return formatted_messages
 
 def palm_messages(messages):
     return [
@@ -153,27 +171,27 @@ def palm_messages(messages):
 def openai_messages(messages):
     formatted_messages = []
     for m in messages:
-        img_match = re.match(r'^image: (\S*)\s*(.*)', m['content'])
-        if img_match:
-            url = img_match.group(1)
-            if not url.startswith('http'): # It's a local file,
-                with open(url, "rb") as image_file:
-                    base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-                url = f"data:image/jpeg;base64,{base64_image}"
-            
-            new = {
-                'role': m['role'],
-                'content': [
-                    {"type": "text", "text": img_match.group(2)},
-                    {"type": "image_url", "image_url": {"url": url, "detail": "auto"}}
-                ]
-            }
+        if match := image_pattern.match(m['content']):
+            file, _, _, text = match.groups()
+            if not file.startswith('http'): # local
+                try:
+                    with open(file, "rb") as image_file:
+                        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                        file = f"data:image/{file.split('.')[1]};base64,{base64_image}"
+                except OSError as e:
+                    console.print(e)
+                    formatted_messages.append(m)
+                    continue
+            new = m.copy()
+            new['content'] = [{"type": "image_url", "image_url": {"url": file}}]
+            if text:
+                new['content'].insert(0, {"type": "text", "text": text})
             formatted_messages.append(new)
         else:
             formatted_messages.append(m)
     return formatted_messages
 
-def chat_gemini(messages, model, temperature, max_tokens, stream):
+def chat_gemini(messages, model, temperature, max_tokens, stream, print_result):
     # user_text = messages[-1]['content']
     llm_model = genai.GenerativeModel(model)
     config = genai.types.GenerationConfig(temperature=temperature)
@@ -198,8 +216,17 @@ def chat_gemini(messages, model, temperature, max_tokens, stream):
     if max_tokens:
         config.max_output_tokens = max_tokens
     llm_messages = gemini_messages(messages)
+    if DEBUG: console.print(llm_messages)
 
-    with console.status('Getting response from Google...'):
+    if print_result:
+        with console.status('Getting response from Google...'):
+            response = llm_model.generate_content(
+                llm_messages,
+                generation_config=config,
+                safety_settings=safety,
+                stream=stream
+            )
+    else:
         response = llm_model.generate_content(
             llm_messages,
             generation_config=config,
@@ -211,44 +238,54 @@ def chat_gemini(messages, model, temperature, max_tokens, stream):
     else:
         return response.text, False
 
-def chat_palm(messages, model, temperature):
+def chat_palm(messages, model, temperature, print_result):
+    llm_messages = palm_messages(messages)
+    if DEBUG: console.print(llm_messages)
     with console.status('Getting response from Google...'):
         response = genai.chat(
             model=model,
             context=messages[0]['content'],
-            messages=palm_messages(messages),
+            messages=llm_messages,
             temperature=temperature
         )
     return response.last, False
 
-def chat_openai(messages, model, temperature, max_tokens, stream):
+def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result):
     llm_messages = openai_messages(messages)
+    if DEBUG: console.print(llm_messages)
     kwargs = {
         'model': model,
         'messages': llm_messages,
         'temperature': temperature,
         'user': USER_ID,
-        'stream': stream
+        'stream': stream,
+        'seed': seed
     }
     if max_tokens: kwargs['max_tokens'] = max_tokens
-    with console.status('Getting response from OpenAI...'):
-        # response = openai.ChatCompletion.create(**kwargs)
+    if print_result:
+        with console.status('Getting response from OpenAI...'):
+            # response = openai.ChatCompletion.create(**kwargs)
+            response = openai.chat.completions.create(**kwargs) # New syntax
+    else:
         response = openai.chat.completions.create(**kwargs) # New syntax
+
     if stream:
         return console.print_stream(chunks_from_openai(response)), True
     else:
         return response.choices[0].message.content, False
 
-def chat_complete(messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True):
+def chat_complete(messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True, seed=None):
     for _ in range(API_TRIES): # 1, 2, ..., n
         try:
             stream = (STREAM and print_result)
             if model.startswith('models/gemini'): # Gemini
-                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream)
+                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream, print_result)
             elif model.startswith('models/'): # PaLM
-                response, printed = chat_palm(messages, model, temperature)
+                response, printed = chat_palm(messages, model, temperature, print_result)
             else: # OpenAI
-                response, printed = chat_openai(messages, model, temperature, max_tokens, stream)
+                if model == 'gpt-4-vision-preview' and max_tokens is None:
+                    max_tokens = 2000 # Override low default for vision
+                response, printed = chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result)
 
             if not printed:
                 console.print_markdown(response)
@@ -293,10 +330,11 @@ def get_summary(request):
  ######   #######  ##    ##    ###    ######## ##     ##  ######  ##     ##    ##    ####  #######  ##    ##
 
 class Conversation:
-    def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL):
+    def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None):
         self.model = model
         self.user_name = user
         self.ai_name = ai
+        self.seed = seed
 
         self.messages = [{"role": "system", "content": "You are a helpful assistant."}]
         self.history = []
@@ -308,6 +346,7 @@ class Conversation:
 
         self.max_chat_tokens = 8000
         self.token_warning = 4000
+        self.total_tokens = 0
         self.cost = 0
 
         self.summarize = True
@@ -340,7 +379,7 @@ class Conversation:
             i = console.input()
         console.print('')
         return i
-    
+
     def __num_tokens(self, messages=None):
         if messages == None:
             messages = self.messages
@@ -371,9 +410,9 @@ class Conversation:
             'models/gemini-pro-vision': 'Gemini Vision'
         }
         if self.model in labels:
-            return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{labels[self.model]}[/] '
+            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{labels[self.model]}[/] '
         else:
-            return f'[ai_label]{n} {self.ai_name}:[/] [od.red_dim]{self.model}[/] '
+            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{self.model}[/] '
 
 
     def messages_string(self, messages, divider=' '):
@@ -406,7 +445,7 @@ class Conversation:
         for n, m in enumerate(self.messages):
             if m['role'] == 'system':
                 self.__print_message(n, m)
-    
+
     def print_messages(self, first=None, last=None):
         l = len(self.history)
 
@@ -433,7 +472,7 @@ class Conversation:
         if prefix:
             console.print(prefix)
 
-        answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result)
+        answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result, seed=self.seed)
         answer_list = [{"role": "assistant", "content": answer}]
 
         if self.model in MODEL_COST:
@@ -485,16 +524,17 @@ class Conversation:
 
         total_time = time.time()-t0
         min, sec = divmod(total_time, 60)
-        if min: time_string = f'[od.cyan_dim]{min:.0f}:{sec:05.2f}s[/]'
-        else: time_string = f'[od.cyan_dim]{sec:05.2f}s[/]'
+        if min: time_string = f'[od.cyan_dim]{min:.0f}:{sec:.2f}s[/]'
+        else: time_string = f'[od.cyan_dim]{sec:.2f}s[/]'
 
-        cost_string = f'[od.dim][od.cyan_dim]{total_tokens}[/] tokens'
+        self.total_tokens = self.__num_tokens()
+        cost_string = f'[od.dim][od.cyan_dim]{self.total_tokens}[/] tokens'
         if MONEY:
             fmt = lambda c: f'[od.green_dim]{c:.2f}[/]'
             summary_string = '+' + fmt(summary_cost) if summary_cost else ''
             cost_string += f' ({summary_string}+{fmt(message_cost)}={fmt(self.cost)})'
 
-        if total_tokens > self.token_warning:
+        if self.total_tokens > self.token_warning:
             console.print(f'{cost_string} {time_string} - Consider restarting conversation\n', justify='center')
         elif MONEY:
             console.print(f'{cost_string} {time_string}\n', justify='center')

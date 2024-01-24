@@ -6,3 +6,6 @@ rich
 pyperclip
 pyyaml
 Pillow
+selenium
+bs4
+webdriver-manager

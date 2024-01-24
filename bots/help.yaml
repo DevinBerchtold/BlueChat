@@ -1,2 +1,0 @@
-- role: system
-  content: 'You are a helpful assistant. You can ask questions to gather more information if necessary to give the best response. Follow the users instructions carefully! Todays date: {TODAY}. Knowledge cutoff: September 2021.'

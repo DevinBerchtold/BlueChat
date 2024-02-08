@@ -42,8 +42,8 @@ if YAML: # Only define YAML functions if needed
 
     def dict_presenter(dumper, data): # Only flow variables dictionary
         l = list(data)
-        # All these != data will be shown on multiple lines in output
-        f = (l[0] != 'date') and (l != ['role', 'content']) and (l[0] != 'variables') and (l[0] not in ['fact', 'help'])
+        # All these will be shown on multiple lines in output
+        f = (l[0] not in ('date', 'role', 'variables', 'blue', 'id', 'python_code'))
         return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=f)
 
     yaml.representer.SafeRepresenter.add_representer(str, str_presenter)

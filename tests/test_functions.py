@@ -1,14 +1,17 @@
 import pytest
 import conftest
-from conversation import *
+import console
+import conversation
+
+console.RICH = False
+conversation.CONFIRM = False
 
 @pytest.mark.parametrize('filename, ai_name, model, seed, test_dialogue', [
-    ('tests/test1', 'CodeBot', 'gpt-3.5-turbo', 42, ['Ok', "Great! If you have any more questions, feel free to ask."]),
-    ('tests/test2', 'Red', 'gpt-4-turbo-preview', 42, ['Hi', 'Hello! How can I assist you today?']),
-    ('tests/test3', 'ChefBot', 'gpt-4', 42, []),
+    ('tests/test4', 'Red', 'gpt-4-turbo-preview', 42, ['What is 2.45/2.44?', "The result of dividing 2.45 by 2.44 is approximately 1.0041."]),
+    ('tests/test5', 'Red', 'gpt-4-turbo-preview', 42, ['56th fibonacci number', 'The 56th Fibonacci number is 225,851,433,717.']),
 ])
-def test_conversation(filename, ai_name, model, seed, test_dialogue):
-    chat = Conversation(filename=filename, seed=seed)
+def test_functions(filename, ai_name, model, seed, test_dialogue):
+    chat = conversation.Conversation(filename=filename, seed=seed, use_tools=True, confirm=False)
     assert chat.ai_name == ai_name
     assert chat.model == model
 
@@ -16,12 +19,12 @@ def test_conversation(filename, ai_name, model, seed, test_dialogue):
         assert chat.get_dialogue(test_dialogue.pop(0)) == True
         assert chat.messages[-1]['content'] == test_dialogue.pop(0)
 
-    chat.summarize_messages(500)
+    # chat.summarize_messages(500)
     chat.save(filename+'_out.yaml')
     chat.save(filename+'_out.json')
 
-    yaml = Conversation(filename=filename+'_out.yaml')
-    json = Conversation(filename=filename+'_out.json')
+    yaml = conversation.Conversation(filename=filename+'_out.yaml')
+    json = conversation.Conversation(filename=filename+'_out.json')
 
     assert yaml.model == json.model
     assert yaml.user_name == json.user_name

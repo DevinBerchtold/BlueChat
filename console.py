@@ -111,15 +111,15 @@ std_print = print
 std_input = input
 
 def remove_tags(s):
-    return re.sub(r'\[.*?\]', '', s)
+    return re.sub(r'\[.*?\]', '', repr(s))
 
-def print(s, **kwargs):
+def print(*args, **kwargs):
     if RICH:
-        return rich_console.print(s, **kwargs)
+        return rich_console.print(*args, **kwargs)
     else:
         exclude = ['justify'] # ignore these parms
         print_kwargs = {k: v for k, v in kwargs.items() if k not in exclude}
-        return std_print(remove_tags(s), **print_kwargs)
+        return std_print(*(remove_tags(a) for a in args), **print_kwargs)
 
 def log(s, **kwargs):
     if RICH:
@@ -187,7 +187,7 @@ def generate_words(chunks):
             if char.isspace():
                 if buffer.isspace():
                     buffer += char
-                else: # Buffer has data and we're begining new chunk
+                else: # Buffer has data and we're beginning new chunk
                     if buffer:
                         yield buffer
                     buffer = char
@@ -257,6 +257,36 @@ def print_filename(filename):
         case [f]:
             s = f'[od.dim]{folder} /[/] [bold]{f}'
     print_rule(s)
+
+def print_function(func):
+    print_markdown(f"**{func['name']}:**")
+    for k, v in func['arguments'].items():
+        if k == 'python_code':
+            print_markdown(f'```python\n{v}\n```')
+        else:
+            print_markdown(f'*{k}: {v}*')
+
+def print_output(c):
+    lines = c.splitlines()
+    if not c:
+        c = '*No output*'
+        print_markdown(c)
+    elif len(lines) > 30 or len(c) > 1000:
+        c = f'*{len(c)/1024.:.2f} kB, {len(lines)} lines*'
+        print_markdown(c)
+    else:
+        for l in lines:
+            print(l)
+
+def print_exception(e, **kwargs):
+    if RICH:
+        rich_console.print_exception(
+            theme = code_block_style,
+            width = os.get_terminal_size().columns,
+            **kwargs
+        )
+    else:
+        std_print(e)
 
 def plen(string): # print length
     return len(remove_tags(string))

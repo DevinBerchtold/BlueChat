@@ -9,15 +9,10 @@ import random
 import pyperclip
 from PIL import ImageGrab, Image
 
-from selenium import webdriver
-from bs4 import BeautifulSoup
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-
 import files
 import console
 import conversation
-
+import functions
 
 
 
@@ -30,6 +25,9 @@ import conversation
  ######   #######  ##    ##  ######     ##    ##     ## ##    ##    ##     ######
 
 DEBUG = False
+files.DEBUG = DEBUG
+console.DEBUG = DEBUG
+conversation.DEBUG = DEBUG
 
 BOT_FOLDER = 'bots'
 CHAT_FOLDER = 'chats'
@@ -204,16 +202,18 @@ def restart_command(chat, *_):
     _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
     FILENUM += 1
 
-def undo_command(chat, num, *_):
-    """Undo and remove the last `num` messages in the chat. Removes the last 2 messages if `num` is not specified."""
-    if num:
-        n = int(num)
-    else:
-        n = 2
-    if len(chat.messages) >= n:
-        chat.messages = chat.messages[:-n]
-        chat.history = chat.history[:-n]
-        console.print(f'Removing last {n} messages')
+def undo_command(chat, *_):
+    """Undo and remove the last set of messages in the chat."""
+    if len(chat.messages) >= 3:
+        mes, his = 0, 0
+        def remove_last(messages):
+            for i, m in enumerate(reversed(messages), 1):
+                if m['role'] == 'user': # Search for the last user message
+                    del messages[-i:]
+                    return i
+        mes = remove_last(chat.messages)
+        his = remove_last(chat.history)
+        console.print(f'Removed {mes} ({his}) messages')
     else:
         console.print('No messages to remove')
 
@@ -228,7 +228,6 @@ def summary_command(chat, tokens, *_):
 def history_command(chat, *_):
     """Print the conversation system messages and full chat history."""
     console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
-    chat.print_systems()
     chat.print_messages()
 
 def save_command(chat, filename, *_):
@@ -266,13 +265,16 @@ def load_command(chat, filename, *_):
 
 def model_command(chat, model, reset):
     """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*b*ison'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
+    chat.use_tools = False
     if model in ['3', '3.5', 'gpt-3']:
         chat.model = 'gpt-3.5-turbo'
+        chat.use_tools = conversation.USE_TOOLS
     elif model in ['4', 'gpt-4-turbo']:
         if chat.model == 'models/gemini-pro-vision':
             chat.model = 'gpt-4-vision-preview'
         else:
-            chat.model = 'gpt-4-1106-preview'
+            chat.model = 'gpt-4-turbo-preview'
+            chat.use_tools = conversation.USE_TOOLS
     elif model in ['gpt-4']:
         chat.model = 'gpt-4'
     elif model in ['32', '32k']:
@@ -286,6 +288,7 @@ def model_command(chat, model, reset):
             chat.model = 'models/gemini-pro-vision'
         else:
             chat.model = 'models/gemini-pro'
+            chat.use_tools = conversation.USE_TOOLS
     elif model:
         chat.model = model
 
@@ -297,6 +300,18 @@ def model_command(chat, model, reset):
         console.print(f'Redoing with {chat.model}...')
         return user_message
     console.print(f"Model={chat.model}")
+
+def tools_command(chat, tool, *_):
+    """Toggle tool usage for `tool` if specified. Otherwise, toggle tool usage for all tools."""
+    if tool:
+        if tool in functions.TOOLS:
+            functions.TOOLS[tool]['enabled'] = not functions.TOOLS[tool]['enabled']
+            console.print(f"Tool {tool} enabled={functions.TOOLS[tool]['enabled']}")
+        else:
+            console.print("Unknown tool")
+    else:
+        chat.use_tools = not chat.use_tools
+        console.print(f'Tools={chat.use_tools}')
 
 def translate_command(chat, ai, user):
     """Toggle translate mode if no parameters are specified. If specified, `ai` is the AI language and `user` is the users language."""
@@ -342,21 +357,26 @@ def auto_command(_, *text):
 def variable_command(chat, parm, *_):
     """Set or print variables for global or chat settings. If `parm` is specified in the format `variable=value`, set the variable. If not specified, print all variables."""
     if parm:
-        var, string = parm.split('=')
-        try: value = int(string)
-        except ValueError:
-            try: value = float(string)
+        if '=' in parm:
+            var, string = parm.split('=')
+            try: value = int(string)
             except ValueError:
-                if string == 'True': value = True
-                elif string == 'False': value = False
-                else: value = string
+                try: value = float(string)
+                except ValueError:
+                    if string == 'True': value = True
+                    elif string == 'False': value = False
+                    else: value = string
+            if var.isupper() and var in globals():
+                globals()[var] = value
+            elif var.islower() and hasattr(chat, var):
+                setattr(chat, var, value)
+        else:
+            var = parm
 
         if var.isupper() and var in globals():
-            globals()[var] = value
-            console.print(f'global {var}={value}')
+            console.print(f'global {var}=', globals()[var])
         elif var.islower() and hasattr(chat, var):
-            setattr(chat, var, value)
-            console.print(f'chat.{var}={value}')
+            console.print(f'chat.{var}=', getattr(chat,var))
         else:
             console.print('Unrecognized variable')
     else:
@@ -370,11 +390,21 @@ def copy_command(chat, parm, *_):
         if parm in ('all', 'a'):
             n = len(chat.messages)
         elif parm in ('code', 'c'):
-            text = chat.messages[-1]['content']
-            pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
-            matches = re.findall(pattern, text)
-            pyperclip.copy('\n\n'.join(matches))
-            console.print(f'Copied {len(matches)} code blocks to clipboard\n')
+            for m in reversed(chat.messages):
+                if 'tool_calls' in m:
+                    for t in m['tool_calls']:
+                        if t['name'] == 'Evaluate':
+                            pyperclip.copy(t['arguments']['python_code'])
+                            console.print(f'Copied evaluate code block to clipboard\n')
+                            return
+                elif 'content' in m:
+                    text = m['content']
+                    pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
+                    matches = re.findall(pattern, text)
+                    if matches:
+                        pyperclip.copy('\n\n'.join(matches))
+                        console.print(f'Copied {len(matches)} code blocks to clipboard\n')
+                        return
         else:
             n = int(parm)
     else:
@@ -394,7 +424,7 @@ def paste_command(_, *text):
 
 def image_name():
     alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    random_id = ''.join(random.choice(alpha) for _ in range(4))
+    random_id = ''.join(random.choices(alpha, k=4))
     return create_filename()+f'_{random_id}.png'
 
 def image_command(_, *text):
@@ -415,62 +445,13 @@ def image_command(_, *text):
         chat.model = 'models/gemini-pro-vision'
     else: # GPT-4
         chat.model = 'gpt-4-vision-preview'
+    chat.use_tools = False
 
     user_input = img_string
+    text = [w for w in text if w is not None]
     if text:
-        text = [w for w in text if w is not None]
         user_input += '\n\n' + ' '.join(text)
     return user_input
-
-def web_command(_, *text):
-    """Attach a website URL from the clipboard to send. If `text` is specified, `text` is included with the message."""
-    url = pyperclip.paste()
-    if not url.startswith('http'):
-        return None
-    with console.status('Starting browser...'):
-        w = str(int(768*1.25))
-        h = str(int(1024*1.25))
-
-        # Setup Selenium WebDriver with headless option
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--log-level=3')
-        options.add_argument('--disable-gpu')  # Sometimes needed if running on Windows
-        options.add_argument(f'--window-size={w},{h}')
-        options.add_experimental_option('excludeSwitches',['enable-logging'])
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-    
-    with console.status('Retrieving webpage...'):
-        driver.get(url)
-
-        parts = []
-
-        type = 'b'
-        if type in ('i', 'b', None):
-            file = image_name()
-            driver.save_screenshot(file)
-            parts += [f'image: {file} ({w}x{h})']
-
-            # Use vision model
-            if chat.model.startswith('models/'): # Gemini
-                chat.model = 'models/gemini-pro-vision'
-            else: # GPT-4
-                chat.model = 'gpt-4-vision-preview'
-
-        if text:
-            text = [w for w in text if w is not None]
-            parts += [' '.join(text)]
-
-        if type in ('t', 'b', None):
-            page_source = driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-            page_text = soup.get_text(separator='\n', strip=True)
-            parts += [page_text]
-
-        driver.quit()
-        if DEBUG: console.print(parts)
-    return '\n\n'.join(parts)
 
 def exit_command(*_):
     """Exit the application."""
@@ -478,7 +459,8 @@ def exit_command(*_):
     sys.exit()
 
 COMMAND_LIST = (
-    'help', 'exit', 'restart', 'undo', 'save', 'load', 'summary', 'history', 'model', 'translate', 'debug', 'auto', 'variable', 'copy', 'paste', 'image', 'web'
+    'help', 'exit', 'restart', 'undo', 'save', 'load', 'summary', 'history', 'model',
+    'tools', 'translate', 'debug', 'auto', 'variable', 'copy', 'paste', 'image'
 )
 ALL_COMMANDS = {}
 
@@ -564,40 +546,48 @@ if __name__ == '__main__':
         window_size_thread.start()
 
     last_input_reset = False
-    while True:
-        # Get a new input
-        user_input = chat.input(prefix=(not last_input_reset))
-        last_input_reset = False
-        if not user_input:
-            screen_reset(chat)
-            last_input_reset = True
-            continue
-        elif user_input.startswith('!'):
-            words = user_input[1:].split(' ') # remove ! and split
-            command = ALL_COMMANDS[words[0]]
-            args = words[1:]
-            if len(args) < 2: # All commands take 2 optional arguments (for now)
-                args += [None] * (2-len(args)) # Extend to minimum length
+    try:
+        while True:
+            # Get a new input
+            user_input = chat.input(prefix=(not last_input_reset))
+            last_input_reset = False
+            if not user_input:
+                screen_reset(chat)
+                last_input_reset = True
+                continue
+            elif user_input.startswith('!'):
+                words = user_input[1:].split(' ') # remove ! and split
+                if words[0] in ALL_COMMANDS:
+                    command = ALL_COMMANDS[words[0]]
+                    args = words[1:]
+                    if len(args) < 2: # All commands take 2 optional arguments (for now)
+                        args += [None] * (2-len(args)) # Extend to minimum length
 
-            # Process commands
-            if command in commands:
-                ret = commands[command](chat, *args)
-                if ret:
-                    user_input = ret
-            elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)
-                FIRST_MESSAGE = False # Just loaded, don't switch context right away
-                load_latest(command, reset=True)
+                    # Process commands
+                    if command in commands:
+                        ret = commands[command](chat, *args)
+                        if ret:
+                            user_input = ret
+                    elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)
+                        FIRST_MESSAGE = False # Just loaded, don't switch context right away
+                        load_latest(command, reset=True)
+                else:
+                    console.print('Unknown command')
+            # Some commands change user_input. Check again if we need to do dialogue
+            if user_input and not user_input.startswith('!'):
+                if SWITCH and FIRST_MESSAGE:
+                    with console.status('Checking context...'):
+                        switch = switch_context(user_input)
+                        if switch and switch != FILENAME:
+                            load_latest(switch, reset=True)
 
-        if user_input and not user_input.startswith('!'): # Some commands change user_input
-            if SWITCH and FIRST_MESSAGE:
-                with console.status('Checking context...'):
-                    switch = switch_context(user_input)
-                    if switch and switch != FILENAME:
-                        load_latest(switch, reset=True)
+                FIRST_MESSAGE = False
 
-            FIRST_MESSAGE = False
+                success = chat.get_dialogue(user_input)
 
-            success = chat.get_dialogue(user_input)
-
-            if success and AUTOSAVE:
-                chat.save(create_filename())
+                if success and AUTOSAVE:
+                    if DEBUG: console.print(chat.messages)
+                    chat.save(create_filename())
+    except Exception as e:
+        console.print_exception(e, show_locals=True)
+        console.print('Fatal error. Please restart. Your data might be saved 🤞')

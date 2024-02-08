@@ -3,15 +3,19 @@ import os
 import time
 import re
 import base64
+import json
 from math import ceil
+import random
 
 import openai
 import tiktoken
 import google.generativeai as genai
+import google.ai.generativelanguage as glm
 from PIL import Image
 
 import files
 import console
+import functions
 
 
 
@@ -27,16 +31,15 @@ DEBUG = False
 
 MONEY = True # Print money conversion in token warning
 MODEL_COST = {
-    k:
-        (a/250, b/250)
-        if k.startswith('models/') # per character
-        else (a/1000, b/1000) # per token
+    k: (a/250, b/250)
+    if k.startswith('models/') # per character
+    else (a/1000, b/1000) # per token
     for k, a, b in [
         # https://openai.com/pricing
-        ('gpt-3.5-turbo', 0.001, 0.002),
+        ('gpt-3.5-turbo', 0.0005, 0.0015),
         ('gpt-4', 0.03, 0.06),
         ('gpt-4-32k', 0.06, 0.12),
-        ('gpt-4-1106-preview', 0.01, 0.03),
+        ('gpt-4-turbo-preview', 0.01, 0.03),
         ('gpt-4-vision-preview', 0.01, 0.03),
         ('gpt-4-turbo', 0.01, 0.03),
         # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
@@ -47,10 +50,23 @@ MODEL_COST = {
         ('unknown', 0.001, 0.002)
     ]
 }
+MODEL_LABELS = {
+    'gpt-4': 'GPT-4',
+    'gpt-4-32k': 'GPT-4 32k',
+    'gpt-4-turbo-preview': 'GPT-4 Turbo',
+    'gpt-4-vision-preview': 'GPT-4 Vision',
+    'gpt-3.5-turbo': 'GPT-3',
+    'models/chat-bison-001': 'Bison',
+    'models/chat-unicorn-001': 'Unicorn',
+    'models/gemini-pro': 'Gemini',
+    'models/gemini-pro-vision': 'Gemini Vision'
+}
 # MODEL = "gpt-3.5-turbo" # Cheaper
 # MODEL = "gpt-4" # Better
-MODEL = "gpt-4-1106-preview" # Cheaper, Faster (?) GPT-4
+MODEL = "gpt-4-turbo-preview" # Cheaper, Faster (?) GPT-4
 # MODEL = 'models/chat-bison-001' # PaLM 2
+USE_TOOLS = True
+CONFIRM = True
 STREAM = True
 API_TRIES = 3
 
@@ -68,6 +84,25 @@ if "GOOGLE_API_KEY" in os.environ:
 else:
     genai.configure(api_key=os.environ["PALM_API_KEY"])
 
+GEMINI_SAFETY = [
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_NONE",
+    }
+]
+
 
 
 
@@ -81,7 +116,7 @@ else:
 
 def num_tokens_gemini(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages."""
-    return sum(len(m['content']) // 4 for m in messages)
+    return sum(len(m['content']) // 4 for m in messages if 'content' in m)
     # llm_model = genai.GenerativeModel(model)
     # return llm_model.count_tokens(gemini_messages(messages))
 
@@ -113,15 +148,54 @@ def num_tokens_openai(messages, model=MODEL):
     encoding = tiktoken.encoding_for_model(model)
     num_tokens = 0
     for message in messages:
-        if match := image_pattern.match(message['content']):
+        if ('content' in message) and (match := image_pattern.match(message['content'])):
             num_tokens += image_tokens_openai(int(match.group(2)), int(match.group(3)))
         num_tokens += 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
         for key, value in message.items():
-            num_tokens += len(encoding.encode(value))
-            if key == "name":  # if there's a name, the role is omitted
-                num_tokens += -1  # role is always required and always 1 token
+            if key != 'tool_calls':
+                num_tokens += len(encoding.encode(value))
+                if key == "name":  # if there's a name, the role is omitted
+                    num_tokens += -1  # role is always required and always 1 token
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
+
+def call_functions(messages, calls):
+    for c in calls:
+        for k, v in c['arguments'].items():
+            if '\n' not in v:
+                if '\\\\n' in v:
+                    c['arguments'][k] = v.replace('\\\\n', '\n')
+                elif '\\n' in v:
+                    c['arguments'][k] = v.replace('\\n', '\n')
+
+    messages.append({
+        "role": "assistant",
+        "tool_calls": calls
+    })
+
+    for c in calls:
+        console.print_function(c)
+        
+        name, args, id = c['name'], c['arguments'], c['id']
+        if name in functions.TOOLS:
+            # arg_dict = json.loads(args)
+            for k, v in args.items():
+                args[k] = v
+
+            if CONFIRM and functions.TOOLS[name]['confirm']:
+                console.input('Press enter to confirm...')
+            else:
+                console.print('')
+            
+            response = functions.TOOLS[name]['function'](**args)
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": id,
+                "name": name,
+                "content": response,
+            })
+            console.print('')
 
 def chunks_from_gemini(response):
     for chunk in response:
@@ -134,14 +208,40 @@ def chunks_from_openai(response):
 
 def gemini_messages(messages):
     new_roles = {
-        # 'system': 'user',
+        'tool': 'tool',
         'assistant': 'model',
         'user': 'user'
     }
 
     formatted_messages = []
+    system_messages = []
     for m in messages:
-        if match := image_pattern.match(m['content']):
+        r = m['role']
+        c = m['content'] if 'content' in m else ''
+        parts = [c]
+        if r == 'system':
+            system_messages.append(c)
+            continue
+        elif r == 'user':
+            parts = ['\n\n'.join(system_messages + [c])]
+            system_messages = []
+        elif r == 'tool':
+            parts = [
+                glm.Part(function_response = glm.FunctionResponse(
+                    name=m['name'],
+                    response={'result': c}
+                ))
+            ]
+        elif 'tool_calls' in m:
+            parts = [
+                glm.Part(function_call = glm.FunctionCall(
+                    name=t['name'],
+                    args=t['arguments']
+                ))
+                for t in m['tool_calls']
+            ]
+
+        if match := image_pattern.match(c):
             file, _, _, text = match.groups()
             try: # It's a local file,
                 img = Image.open(file)
@@ -152,12 +252,11 @@ def gemini_messages(messages):
 
             except OSError as e:
                 console.print(e)
-                parts = [ m['content'] ]
-        else:
-            parts = [ m['content'] ]
-        if m['role'] in new_roles:
+                parts = [c]
+        
+        if r in new_roles:
             formatted_messages.append({
-                'role': new_roles[ m['role'] ],
+                'role': new_roles[r],
                 'parts': parts
             })
     return formatted_messages
@@ -171,7 +270,19 @@ def palm_messages(messages):
 def openai_messages(messages):
     formatted_messages = []
     for m in messages:
-        if match := image_pattern.match(m['content']):
+        if 'tool_calls' in m:
+            formatted_messages.append({
+                'role': m['role'],
+                'tool_calls': [
+                    {
+                        'id': t['id'],
+                        'type': 'function',
+                        'function': { 'name': t['name'], 'arguments': json.dumps(t['arguments']) }
+                    }
+                    for t in m['tool_calls']
+                ]
+            })
+        elif match := image_pattern.match(m['content']):
             file, _, _, text = match.groups()
             if not file.startswith('http'): # local
                 try:
@@ -191,48 +302,52 @@ def openai_messages(messages):
             formatted_messages.append(m)
     return formatted_messages
 
-def chat_gemini(messages, model, temperature, max_tokens, stream, print_result):
-    # user_text = messages[-1]['content']
-    llm_model = genai.GenerativeModel(model)
-    config = genai.types.GenerationConfig(temperature=temperature)
-    safety = [ # Dangerous mode
-        {
-            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_HATE_SPEECH",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_HARASSMENT",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-            "threshold": "BLOCK_NONE",
-        }
-    ]
-    if max_tokens:
-        config.max_output_tokens = max_tokens
+def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, use_tools):
     llm_messages = gemini_messages(messages)
     if DEBUG: console.print(llm_messages)
+    if model == 'models/gemini-pro-vision':
+        llm_messages = [llm_messages[-1]] # Multiturn not yet supported by gemini-vision
+
+    if use_tools: llm_model = genai.GenerativeModel(model,tools=functions.tools_gemini())
+    else: llm_model = genai.GenerativeModel(model)
+
+    config = genai.types.GenerationConfig()
+    if temperature: config.max_output_tokens = temperature
+    if max_tokens: config.max_output_tokens = max_tokens
+    kwargs = {
+        'generation_config': config,
+        'safety_settings': GEMINI_SAFETY,
+        'stream': (stream and not use_tools)
+    }
 
     if print_result:
         with console.status('Getting response from Google...'):
-            response = llm_model.generate_content(
-                llm_messages,
-                generation_config=config,
-                safety_settings=safety,
-                stream=stream
-            )
+            response = llm_model.generate_content(llm_messages, **kwargs)
     else:
-        response = llm_model.generate_content(
-            llm_messages,
-            generation_config=config,
-            safety_settings=safety,
-            stream=stream
-        )
+        response = llm_model.generate_content(llm_messages, **kwargs)
+
+    if use_tools:
+        tool_calls = response.candidates[0].content.parts
+        # if hasattr(response.parts[0], 'function_call'):
+        if response.parts[0].function_call.name:
+        # while parts[0].function_call.name:
+            alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+            call_functions(messages, [
+                {
+                    'id': 'call_'+''.join(random.choices(alpha, k=4)),
+                    'name': t.function_call.name,
+                    'arguments': dict(t.function_call.args)
+                }
+                for t in tool_calls
+            ])
+
+            llm_messages = gemini_messages(messages)
+            if DEBUG: console.print(llm_messages)
+            kwargs['stream'] = stream # False?
+            response = llm_model.generate_content(llm_messages, **kwargs)
+        else:
+            return response.text, False
+    
     if stream:
         return console.print_stream(chunks_from_gemini(response)), True
     else:
@@ -250,7 +365,7 @@ def chat_palm(messages, model, temperature, print_result):
         )
     return response.last, False
 
-def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result):
+def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = openai_messages(messages)
     if DEBUG: console.print(llm_messages)
     kwargs = {
@@ -262,6 +377,10 @@ def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_re
         'seed': seed
     }
     if max_tokens: kwargs['max_tokens'] = max_tokens
+    # if temperature: kwargs['temperature'] = temperature
+    if use_tools:
+        kwargs['tools'] = functions.tools_openai()
+        kwargs['stream'] = False
     if print_result:
         with console.status('Getting response from OpenAI...'):
             # response = openai.ChatCompletion.create(**kwargs)
@@ -269,30 +388,52 @@ def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_re
     else:
         response = openai.chat.completions.create(**kwargs) # New syntax
 
+    if use_tools:
+        if tool_calls := response.choices[0].message.tool_calls:
+            call_functions(messages, [
+                {
+                    'id': t.id,
+                    'name': t.function.name,
+                    'arguments': functions.get_args(t.function.name, t.function.arguments)
+                }
+                for t in tool_calls
+            ])
+
+            kwargs['stream'] = stream
+            kwargs['messages'] = openai_messages(messages)
+            if DEBUG: console.print(kwargs['messages'])
+            response = openai.chat.completions.create(**kwargs)
+        else:
+            return response.choices[0].message.content, False
     if stream:
         return console.print_stream(chunks_from_openai(response)), True
     else:
         return response.choices[0].message.content, False
 
-def chat_complete(messages, model=MODEL, temperature=0.8, max_tokens=None, print_result=True, seed=None):
-    for _ in range(API_TRIES): # 1, 2, ..., n
+def chat_complete(messages, model=MODEL, temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
+    for n in range(API_TRIES): # 0, 1, 2, ..., n
         try:
             stream = (STREAM and print_result)
             if model.startswith('models/gemini'): # Gemini
-                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream, print_result)
+                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream, print_result, use_tools)
             elif model.startswith('models/'): # PaLM
                 response, printed = chat_palm(messages, model, temperature, print_result)
             else: # OpenAI
                 if model == 'gpt-4-vision-preview' and max_tokens is None:
                     max_tokens = 2000 # Override low default for vision
-                response, printed = chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result)
-
+                response, printed = chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools)
             if not printed:
                 console.print_markdown(response)
             return response
         except Exception as e:
-            console.print(f"Error: {e}\nTrying again in {1} second...\n")
-            time.sleep(1)
+            if n == 0: # Only fully print exception on first try
+                console.print_exception(e)
+            else:
+                console.print(e)
+            
+            if n < API_TRIES-1: # No last try
+                console.print(f"\nTrying again...")
+                time.sleep(1)
 
     raise ConnectionError(f"Failed to access LLM API after {API_TRIES} attempts.")
 
@@ -330,8 +471,10 @@ def get_summary(request):
  ######   #######  ##    ##    ###    ######## ##     ##  ######  ##     ##    ##    ####  #######  ##    ##
 
 class Conversation:
-    def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None):
+    def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None, use_tools=USE_TOOLS, confirm=True):
         self.model = model
+        self.use_tools = use_tools
+        self.confirm = confirm
         self.user_name = user
         self.ai_name = ai
         self.seed = seed
@@ -398,22 +541,10 @@ class Conversation:
     def ai_prefix(self, n=None):
         if n is None:
             n = len(self.history)+1
-        labels = {
-            'gpt-4': 'GPT-4',
-            'gpt-4-32k': 'GPT-4 32k',
-            'gpt-4-1106-preview': 'GPT-4 Turbo',
-            'gpt-4-vision-preview': 'GPT-4 Vision',
-            'gpt-3.5-turbo': 'GPT-3',
-            'models/chat-bison-001': 'Bison',
-            'models/chat-unicorn-001': 'Unicorn',
-            'models/gemini-pro': 'Gemini',
-            'models/gemini-pro-vision': 'Gemini Vision'
-        }
-        if self.model in labels:
-            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{labels[self.model]}[/] '
+        if self.model in MODEL_LABELS:
+            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{MODEL_LABELS[self.model]}[/] '
         else:
             return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{self.model}[/] '
-
 
     def messages_string(self, messages, divider=' '):
         strings = []
@@ -428,38 +559,47 @@ class Conversation:
                 s = f'{self.ai_name}: {c}'
             strings.append(s)
         return divider.join(strings)
-    
-    def __print_message(self, n, m):
-        match m['role']:
-            case 'system':
-                p = '[bold]System:' if n == 0 else f'[bold]Summary {n}:'
-            case 'user':
-                p = self.user_prefix(n)
-            case 'assistant':
-                p = self.ai_prefix(n)
-        console.print(p)
-        console.print_markdown(m['content'])
-        console.print('') # blank line
-
-    def print_systems(self):
-        for n, m in enumerate(self.messages):
-            if m['role'] == 'system':
-                self.__print_message(n, m)
 
     def print_messages(self, first=None, last=None):
-        l = len(self.history)
-
         if first == None: first = 0
-        elif first < 0: first += l
+        if last == None: last = len(self.messages)
+        g = [
+            m for m in self.messages[:first+1]
+            if m['role'] in ('user', 'assistant')
+            and 'content' in m
+        ]
+        n = len(g)
+        f = False
+        for m in self.messages[first:last]:
+            p = None
+            if m['role'] == 'system':
+                p = '[bold]System:' if n == 0 else f'[bold]Summary {n}:'
+            elif m['role'] == 'user':
+                p = self.user_prefix(n)
+            elif m['role'] == 'assistant':
+                if 'tool_calls' in m:
+                    console.print(self.ai_prefix(n))
+                    for c in m['tool_calls']:
+                        console.print_function(c)
+                    n += 1
+                else:
+                    if f:
+                        console.print_markdown(m['content'])
+                        f = False
+                    else:
+                        p = self.ai_prefix(n)
+            elif m['role'] == 'tool':
+                console.print_output(m['content'])
+                f = True
 
-        if last == None: last = l
-        elif last < 0: last += l
+            if p:
+                console.print(p)
+                console.print_markdown(m['content'])
+                n += 1
+            
+            console.print('') # blank line
 
-        if last == first: last += 1 #if they're the same, bump last so we return 1
-        for n, m in enumerate(self.history[first:last], start=first+1):
-            self.__print_message(n, m)
-
-    def __complete(self, messages=None, system=None, user=None, print_result=False, prefix=''):
+    def __complete(self, messages=None, system=None, user=None, print_result=False, prefix='', use_tools=False):
         if not messages:
             if system and user:
                 messages = [
@@ -472,7 +612,7 @@ class Conversation:
         if prefix:
             console.print(prefix)
 
-        answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result, seed=self.seed)
+        answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result, seed=self.seed, use_tools=use_tools)
         answer_list = [{"role": "assistant", "content": answer}]
 
         if self.model in MODEL_COST:
@@ -508,9 +648,9 @@ class Conversation:
         self.history.append(message)
 
         try:
-            answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix())
+            answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix(), use_tools=self.use_tools)
         except ConnectionError as e:
-            console.print(str(e)+'\n')
+            console.print(f'\n{e}\n')
             self.messages.pop()
             self.history.pop()
             return False

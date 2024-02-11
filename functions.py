@@ -2,6 +2,7 @@ import io
 import sys
 import traceback
 import json
+import subprocess
 
 import pyperclip
 
@@ -38,26 +39,39 @@ class CaptureOutput:
         sys.stdout = self._old_stdout
         self._str_io.close()
 
-def execute(python_code):
+def execute(python_code, stream=True):
     filename = 'temp.py'
     with open(filename, 'w') as f:
         f.write(python_code)
-
     ret = ''
-    try:
-        with CaptureOutput() as capt:
-            compiled_code = compile(python_code, filename, 'exec')
-            exec(compiled_code, {})
-        ret = capt.output
-        console.print_output(ret)
-    except Exception as e: # Simulate traceback in return string
-        exc_lines = traceback.format_exc().splitlines()
-        exc_lines = [exc_lines[0]] + exc_lines[3:] # Remove the frame of this module
-        ret = capt.output + '\n'.join(exc_lines)
+    if stream: # Stream from another process
+        process = subprocess.Popen(['python', '-u', 'temp.py'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while True: # Read the output line by line as it is produced
+            output_line = process.stdout.readline()
+            if not output_line and process.poll() is not None:
+                break
+            ret += output_line
+            console.print(output_line, end='')
 
-        console.print_output(capt.output)
-        console.print_exception(e, suppress=['functions'], show_locals=True)
-
+        # Check for and print any standard error output
+        stderr_output = process.communicate()[1]
+        if stderr_output:
+            console.print(stderr_output)
+            ret += stderr_output
+    else: # Not streaming, just use exec()
+        try:
+            with CaptureOutput() as capt:
+                compiled_code = compile(python_code, filename, 'exec')
+                exec(compiled_code, {})
+            ret = capt.output
+            console.print_output(ret)
+        except Exception as e: # Simulate traceback in return string
+            exc_lines = traceback.format_exc().splitlines()
+            exc_lines = [exc_lines[0]] + exc_lines[3:] # Remove the frame of this module
+            ret = capt.output + '\n'.join(exc_lines)
+            # ret = ret + '\n'.join(exc_lines)
+            # console.print_output(capt.output)
+            console.print_exception(e, suppress=['functions'], show_locals=True)
     return ret
 
 driver = None

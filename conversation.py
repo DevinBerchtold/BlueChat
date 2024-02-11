@@ -6,6 +6,7 @@ import base64
 import json
 from math import ceil
 import random
+from dataclasses import dataclass
 
 import openai
 import tiktoken
@@ -30,47 +31,55 @@ import functions
 DEBUG = False
 
 MONEY = True # Print money conversion in token warning
-MODEL_COST = {
-    k: (a/250, b/250)
-    if k.startswith('models/') # per character
-    else (a/1000, b/1000) # per token
-    for k, a, b in [
-        # https://openai.com/pricing
-        ('gpt-3.5-turbo', 0.0005, 0.0015),
-        ('gpt-4', 0.03, 0.06),
-        ('gpt-4-32k', 0.06, 0.12),
-        ('gpt-4-turbo-preview', 0.01, 0.03),
-        ('gpt-4-vision-preview', 0.01, 0.03),
-        ('gpt-4-turbo', 0.01, 0.03),
-        # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
-        ('models/chat-bison-001', 0.00025, 0.0005),
-        ('models/chat-unicorn-001', 0.0025, 0.0075),
-        ('models/gemini-pro', 0.00025, 0.0005),
-        ('models/gemini-pro-vision', 0.00025, 0.0005),
-        ('unknown', 0.001, 0.002)
-    ]
-}
-MODEL_LABELS = {
-    'gpt-4': 'GPT-4',
-    'gpt-4-32k': 'GPT-4 32k',
-    'gpt-4-turbo-preview': 'GPT-4 Turbo',
-    'gpt-4-vision-preview': 'GPT-4 Vision',
-    'gpt-3.5-turbo': 'GPT-3',
-    'models/chat-bison-001': 'Bison',
-    'models/chat-unicorn-001': 'Unicorn',
-    'models/gemini-pro': 'Gemini',
-    'models/gemini-pro-vision': 'Gemini Vision'
-}
-# MODEL = "gpt-3.5-turbo" # Cheaper
-# MODEL = "gpt-4" # Better
+
+MODEL_SHORTCUTS = {}
+@dataclass(frozen=True)
+class Model:
+    id: str
+    label: str
+    costs: tuple
+    context: int
+    llm: str
+    shortcuts: tuple = ()
+    tools: bool = False
+    vision: bool = False
+
+    def __post_init__(self):
+        for s in (*self.shortcuts, self.id):
+            if s not in MODEL_SHORTCUTS: MODEL_SHORTCUTS[s] = self.id
+
+MODEL_LIST = [ # cost: openai/1000, google*4/1000
+    # https://openai.com/pricing
+    Model(id='gpt-3.5-turbo', label='GPT-3.5', costs=(0.0000005, 0.0000015),
+        context=16385, llm='openai', shortcuts=('3', '3.5', 'gpt-3'), tools=True),
+    Model(id='gpt-4', label='GPT-4', costs=(0.00003, 0.00006),
+        context=8192, llm='openai', tools=True),
+    Model(id='gpt-4-32k', label='GPT-4 32k', costs=(0.00006, 0.00012),
+        context=32768, llm='openai', shortcuts=('32', '32k')),
+    Model(id='gpt-4-turbo-preview', label='GPT-4 Turbo', costs=(0.00001, 0.00003),
+        context=128000, llm='openai', shortcuts=('4', 'gpt-4-turbo'), tools=True, vision='gpt-4-vision-preview'),
+    Model(id='gpt-4-vision-preview', label='GPT-4 Vision', costs=(0.00001, 0.00003),
+        context=128000, llm='openai', vision=True),
+    # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
+    Model(id='models/chat-bison-001', label='Bison', costs=(0.000001, 0.000002),
+        context=4096, llm='palm', shortcuts=('b', 'palm', 'bison')),
+    Model(id='models/chat-unicorn-001', label='Unicorn', costs=(0.00004, 0.00003),
+        context=4096, llm='palm', shortcuts=('u', 'unicorn')),
+    Model(id='models/gemini-pro', label='Gemini', costs=(0.000001, 0.000002),
+        context=32768, llm='gemini', shortcuts=('g', 'gemini'), tools=True, vision='models/gemini-pro-vision'),
+    Model(id='models/gemini-pro-vision', label='Gemini Vision', costs=(0.000001, 0.000002),
+        context=32768, llm='gemini', vision=True),
+]
+MODELS = {m.id: m for m in MODEL_LIST}
+
 MODEL = "gpt-4-turbo-preview" # Cheaper, Faster (?) GPT-4
-# MODEL = 'models/chat-bison-001' # PaLM 2
 USE_TOOLS = True
 CONFIRM = True
 STREAM = True
 API_TRIES = 3
 
-UNSAVED_VARIABLES = ['messages', 'history', 'summarized', 'translate', 'user_lang', 'ai_lang']
+NOSAVE_VARS = ('messages', 'history', 'summarized', 'translate', 'user_lang', 'ai_lang')
+NOPRINT_VARS = ('messages', 'history')
 
 try:
     USER_ID = os.getlogin()
@@ -183,7 +192,8 @@ def call_functions(messages, calls):
                 args[k] = v
 
             if CONFIRM and functions.TOOLS[name]['confirm']:
-                console.input('Press enter to confirm...')
+                console.print('Press enter to confirm...')
+                console.input()
             else:
                 console.print('')
             
@@ -196,15 +206,6 @@ def call_functions(messages, calls):
                 "content": response,
             })
             console.print('')
-
-def chunks_from_gemini(response):
-    for chunk in response:
-        yield chunk.text if chunk.parts.pb else ''
-
-def chunks_from_openai(response):
-    for chunk in response:
-        content = chunk.choices[0].delta.content
-        yield content if content else ''
 
 def gemini_messages(messages):
     new_roles = {
@@ -302,6 +303,36 @@ def openai_messages(messages):
             formatted_messages.append(m)
     return formatted_messages
 
+def stream_gemini(llm_model, response, messages, **kwargs):
+    """Stream chunks from content messages while detecting and executing function calls."""
+    alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    while True:
+        func_calls = []
+        for chunk in response:
+            if chunk.parts[0].function_call.name:
+                for n, tc in enumerate(chunk.parts):
+                    func = tc.function_call
+                    while len(func_calls) <= n: # Extend if necessary
+                        func_calls.append({'arguments': {}})
+                    if func:                        
+                        func_calls[n]['name'] = func.name
+                        for k, v in func.args.items():
+                            if k in func_calls[n]['arguments']:
+                                func_calls[n]['arguments'][k] += v
+                            else:
+                                func_calls[n]['arguments'][k] = v
+                        if 'id' not in func_calls[n]:
+                            func_calls[n]['id'] = 'call_'+''.join(random.choices(alpha, k=4))
+            else:
+                yield chunk.text if chunk.parts.pb else ''
+        
+        if func_calls: # Call the functions and run model again
+            call_functions(messages, func_calls)
+            llm_messages = gemini_messages(messages)
+            response = llm_model.generate_content(llm_messages, **kwargs)
+        else:
+            break
+
 def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, use_tools):
     llm_messages = gemini_messages(messages)
     if DEBUG: console.print(llm_messages)
@@ -312,44 +343,22 @@ def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, 
     else: llm_model = genai.GenerativeModel(model)
 
     config = genai.types.GenerationConfig()
-    if temperature: config.max_output_tokens = temperature
+    if temperature: config.temperature = temperature
     if max_tokens: config.max_output_tokens = max_tokens
     kwargs = {
         'generation_config': config,
         'safety_settings': GEMINI_SAFETY,
-        'stream': (stream and not use_tools)
+        'stream': stream
     }
 
     if print_result:
-        with console.status('Getting response from Google...'):
+        with console.status('Connecting to Google...'):
             response = llm_model.generate_content(llm_messages, **kwargs)
     else:
         response = llm_model.generate_content(llm_messages, **kwargs)
 
-    if use_tools:
-        tool_calls = response.candidates[0].content.parts
-        # if hasattr(response.parts[0], 'function_call'):
-        if response.parts[0].function_call.name:
-        # while parts[0].function_call.name:
-            alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-            call_functions(messages, [
-                {
-                    'id': 'call_'+''.join(random.choices(alpha, k=4)),
-                    'name': t.function_call.name,
-                    'arguments': dict(t.function_call.args)
-                }
-                for t in tool_calls
-            ])
-
-            llm_messages = gemini_messages(messages)
-            if DEBUG: console.print(llm_messages)
-            kwargs['stream'] = stream # False?
-            response = llm_model.generate_content(llm_messages, **kwargs)
-        else:
-            return response.text, False
-    
-    if stream:
-        return console.print_stream(chunks_from_gemini(response)), True
+    if use_tools or stream:
+        return console.print_stream(stream_gemini(llm_model, response, messages, **kwargs)), True
     else:
         return response.text, False
 
@@ -365,6 +374,32 @@ def chat_palm(messages, model, temperature, print_result):
         )
     return response.last, False
 
+def stream_openai(response, messages, **kwargs):
+    """Stream chunks from content messages while detecting and executing function calls."""
+    while True:
+        func_calls = []
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.tool_calls:
+                for n, tc in enumerate(delta.tool_calls):
+                    while len(func_calls) <= n: # Extend if necessary
+                        func_calls.append({'arguments': ''})
+                    if tc.id: func_calls[n]["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name: func_calls[n]['name'] = tc.function.name
+                        if tc.function.arguments: func_calls[n]["arguments"] += tc.function.arguments
+            else:
+                yield delta.content if delta.content else ''
+
+        if func_calls: # Call the functions and run model again
+            for f in func_calls:
+                f['arguments'] = functions.get_args(f['name'], f['arguments'])
+            call_functions(messages, func_calls)
+            kwargs['messages'] = openai_messages(messages)
+            response = openai.chat.completions.create(**kwargs)
+        else:
+            break
+
 def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = openai_messages(messages)
     if DEBUG: console.print(llm_messages)
@@ -377,51 +412,31 @@ def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_re
         'seed': seed
     }
     if max_tokens: kwargs['max_tokens'] = max_tokens
-    # if temperature: kwargs['temperature'] = temperature
-    if use_tools:
-        kwargs['tools'] = functions.tools_openai()
-        kwargs['stream'] = False
+    if use_tools: kwargs['tools'] = functions.tools_openai()
     if print_result:
-        with console.status('Getting response from OpenAI...'):
-            # response = openai.ChatCompletion.create(**kwargs)
+        with console.status('Connecting to OpenAI...'):
             response = openai.chat.completions.create(**kwargs) # New syntax
     else:
         response = openai.chat.completions.create(**kwargs) # New syntax
-
-    if use_tools:
-        if tool_calls := response.choices[0].message.tool_calls:
-            call_functions(messages, [
-                {
-                    'id': t.id,
-                    'name': t.function.name,
-                    'arguments': functions.get_args(t.function.name, t.function.arguments)
-                }
-                for t in tool_calls
-            ])
-
-            kwargs['stream'] = stream
-            kwargs['messages'] = openai_messages(messages)
-            if DEBUG: console.print(kwargs['messages'])
-            response = openai.chat.completions.create(**kwargs)
-        else:
-            return response.choices[0].message.content, False
-    if stream:
-        return console.print_stream(chunks_from_openai(response)), True
+    
+    if use_tools or stream:
+        del kwargs['messages']
+        return console.print_stream(stream_openai(response, messages, **kwargs)), True
     else:
         return response.choices[0].message.content, False
 
-def chat_complete(messages, model=MODEL, temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
+def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
     for n in range(API_TRIES): # 0, 1, 2, ..., n
         try:
             stream = (STREAM and print_result)
-            if model.startswith('models/gemini'): # Gemini
-                response, printed = chat_gemini(messages, model, temperature, max_tokens, stream, print_result, use_tools)
-            elif model.startswith('models/'): # PaLM
-                response, printed = chat_palm(messages, model, temperature, print_result)
+            if model.llm == 'gemini':
+                response, printed = chat_gemini(messages, model.id, temperature, max_tokens, stream, print_result, use_tools)
+            elif model.llm == 'palm':
+                response, printed = chat_palm(messages, model.id, temperature, print_result)
             else: # OpenAI
-                if model == 'gpt-4-vision-preview' and max_tokens is None:
+                if model.id == 'gpt-4-vision-preview' and max_tokens is None:
                     max_tokens = 2000 # Override low default for vision
-                response, printed = chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools)
+                response, printed = chat_openai(messages, model.id, temperature, max_tokens, stream, seed, print_result, use_tools)
             if not printed:
                 console.print_markdown(response)
             return response
@@ -437,7 +452,7 @@ def chat_complete(messages, model=MODEL, temperature=None, max_tokens=None, prin
 
     raise ConnectionError(f"Failed to access LLM API after {API_TRIES} attempts.")
 
-def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODEL):
+def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODELS[MODEL]):
     complete_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_request }
@@ -472,7 +487,7 @@ def get_summary(request):
 
 class Conversation:
     def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None, use_tools=USE_TOOLS, confirm=True):
-        self.model = model
+        self.model = MODELS[model]
         self.use_tools = use_tools
         self.confirm = confirm
         self.user_name = user
@@ -512,7 +527,7 @@ class Conversation:
                 console.print("Error: Couldn't load file on reset()")
 
     def print_vars(self):
-        variables = {k: v for k, v in vars(self).items() if k not in UNSAVED_VARIABLES}
+        variables = {k: v for k, v in vars(self).items() if k not in NOPRINT_VARS}
         console.print(variables)
     
     def input(self, prefix=True):
@@ -526,12 +541,12 @@ class Conversation:
     def __num_tokens(self, messages=None):
         if messages == None:
             messages = self.messages
-        if self.model.startswith('models/gemini'):
-            return num_tokens_gemini(messages, self.model)
-        elif self.model.startswith('models/'):
-            return num_tokens_palm(messages, self.model)
+        if self.model.llm == 'gemini':
+            return num_tokens_gemini(messages, self.model.id)
+        elif self.model.llm == 'palm':
+            return num_tokens_palm(messages, self.model.id)
         else:
-            return num_tokens_openai(messages, self.model)
+            return num_tokens_openai(messages, self.model.id)
 
     def user_prefix(self, n=None):
         if n is None:
@@ -541,22 +556,27 @@ class Conversation:
     def ai_prefix(self, n=None):
         if n is None:
             n = len(self.history)+1
-        if self.model in MODEL_LABELS:
-            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{MODEL_LABELS[self.model]}[/] '
-        else:
-            return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{self.model}[/] '
+        return f'[ai_label]{n} {self.ai_name}:[/] [od.blue_dim]{self.model.label}[/] '
 
-    def messages_string(self, messages, divider=' '):
+    def messages_string(self, messages, divider='\n'):
         strings = []
         for m in messages:
-            c = m['content']
             r = m['role']
             if r == 'system':
-                s = f'{c}'
+                s = m['content']
             elif r == 'user':
-                s = f'{self.user_name}: {c}'
+                s = f"{self.user_name}: {m['content']}"
             elif r == 'assistant':
-                s = f'{self.ai_name}: {c}'
+                if 'content' in m:
+                    s = f"{self.ai_name}: {m['content']}"
+                elif 'tool_calls' in m:
+                    s = f"{self.ai_name}: "
+                    for t in m['tool_calls']:
+                        s += t['name']
+                        for k, v in t['arguments'].items():
+                            s += f"\n{k}: {v}"
+            elif r == 'tool':
+                s = f"{m['name']}: {m['content']}".rstrip('\n')
             strings.append(s)
         return divider.join(strings)
 
@@ -615,10 +635,7 @@ class Conversation:
         answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result, seed=self.seed, use_tools=use_tools)
         answer_list = [{"role": "assistant", "content": answer}]
 
-        if self.model in MODEL_COST:
-            in_cost, out_cost = MODEL_COST[self.model]
-        else:
-            in_cost, out_cost = MODEL_COST['unknown'] # Guess cost for unknown models
+        in_cost, out_cost = self.model.costs
         cost = self.__num_tokens()*in_cost + self.__num_tokens(answer_list)*out_cost # prompt cost + response cost
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
@@ -664,7 +681,7 @@ class Conversation:
 
         total_time = time.time()-t0
         min, sec = divmod(total_time, 60)
-        if min: time_string = f'[od.cyan_dim]{min:.0f}:{sec:.2f}s[/]'
+        if min: time_string = f'[od.cyan_dim]{min:.0f}:{sec:05.2f}[/]'
         else: time_string = f'[od.cyan_dim]{sec:.2f}s[/]'
 
         self.total_tokens = self.__num_tokens()
@@ -721,7 +738,9 @@ class Conversation:
             for k, v in data.items():
                 if k == 'variables':
                     for x, y in v.items(): # for each variable
-                        if x not in UNSAVED_VARIABLES: # Don't restore these
+                        if x == 'model':
+                            self.model = MODELS[y]
+                        elif x not in NOSAVE_VARS: # Don't restore these
                             setattr(self, x, y)
                 elif k == 'messages':
                     self.messages = v
@@ -767,7 +786,8 @@ class Conversation:
 
     def save(self, filename):
         # Class instance variables except messages and history (those are listed separate)
-        variables = {k: v for k, v in vars(self).items() if k not in UNSAVED_VARIABLES}
+        variables = {k: v for k, v in vars(self).items() if k not in NOSAVE_VARS}
+        variables['model'] = self.model.id
         date = datetime.now()
         data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
 

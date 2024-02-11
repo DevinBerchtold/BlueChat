@@ -50,12 +50,13 @@ except Exception:
 SWITCH = True
 FIRST_MESSAGE = True
 
-SAVED_VARS = ['USER_NAME', 'FILENAME', 'SWITCH']
+SAVE_VARS = ('USER_NAME', 'FILENAME', 'SWITCH')
+NOPRINT_VARS = ('ALL_COMMANDS',)
 config = files.load_file(CONFIG)
 BOTS = config['bots']
 for k, v in config['variables'].items():
     # Import certain variables from bots file
-    if k in SAVED_VARS:
+    if k in SAVE_VARS:
         globals()[k] = v
 
 ALL_BOTS = sorted([
@@ -77,7 +78,7 @@ PRINT_START = 1
 ##        #######  ##    ##  ######     ##    ####  #######  ##    ##  ######
 
 def save_config():
-    vars = {k: globals()[k] for k in SAVED_VARS}
+    vars = {k: globals()[k] for k in SAVE_VARS}
     data = {'variables': vars, 'bots': BOTS}
     files.save_file(data, CONFIG)
 
@@ -202,17 +203,18 @@ def restart_command(chat, *_):
     _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
     FILENUM += 1
 
+def undo_messages(messages):
+    for i, m in enumerate(reversed(messages), 1):
+        if m['role'] == 'user': # Search for the last user message
+            c = m['content']
+            del messages[-i:]
+            return i, c # Return number removed and user content
+
 def undo_command(chat, *_):
     """Undo and remove the last set of messages in the chat."""
     if len(chat.messages) >= 3:
-        mes, his = 0, 0
-        def remove_last(messages):
-            for i, m in enumerate(reversed(messages), 1):
-                if m['role'] == 'user': # Search for the last user message
-                    del messages[-i:]
-                    return i
-        mes = remove_last(chat.messages)
-        his = remove_last(chat.history)
+        mes, _ = undo_messages(chat.messages)
+        his, _ = undo_messages(chat.history)
         console.print(f'Removed {mes} ({his}) messages')
     else:
         console.print('No messages to remove')
@@ -265,39 +267,20 @@ def load_command(chat, filename, *_):
 
 def model_command(chat, model, reset):
     """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*b*ison'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
-    chat.use_tools = False
-    if model in ['3', '3.5', 'gpt-3']:
-        chat.model = 'gpt-3.5-turbo'
-        chat.use_tools = conversation.USE_TOOLS
-    elif model in ['4', 'gpt-4-turbo']:
-        if chat.model == 'models/gemini-pro-vision':
-            chat.model = 'gpt-4-vision-preview'
+    if model in conversation.MODEL_SHORTCUTS:
+        model_id = conversation.MODEL_SHORTCUTS[model]
+        mod = conversation.MODELS[model_id]
+        # Old model is vision and new model has vision
+        if chat.model.vision == True and isinstance(mod.vision, str):
+            chat.model = conversation.MODELS[mod.vision]
         else:
-            chat.model = 'gpt-4-turbo-preview'
-            chat.use_tools = conversation.USE_TOOLS
-    elif model in ['gpt-4']:
-        chat.model = 'gpt-4'
-    elif model in ['32', '32k']:
-        chat.model = 'gpt-4-32k'
-    elif model in ['2', 'b', 'palm', 'bison', 'models/chat-bison-001']:
-        chat.model = 'models/chat-bison-001'
-    elif model in ['u', 'unicorn', 'models/chat-unicorn-001']:
-        chat.model = 'models/chat-unicorn-001'
-    elif model in ['g', 'gemini', 'gemini-pro']:
-        if chat.model == 'gpt-4-vision-preview':
-            chat.model = 'models/gemini-pro-vision'
-        else:
-            chat.model = 'models/gemini-pro'
-            chat.use_tools = conversation.USE_TOOLS
-    elif model:
-        chat.model = model
+            chat.model = mod
+            chat.use_tools = conversation.USE_TOOLS if mod.tools else False
 
     if reset in ('redo', 'r'):
-        user_message = chat.messages[-2]['content']
-        if len(chat.messages) >= 2:
-            chat.messages = chat.messages[:-2]
-            chat.history = chat.history[:-2]
-        console.print(f'Redoing with {chat.model}...')
+        _, user_message = undo_messages(chat.messages)
+        _, _ = undo_messages(chat.history)
+        console.print(f'Redoing with {chat.model.label}...')
         return user_message
     console.print(f"Model={chat.model}")
 
@@ -380,7 +363,7 @@ def variable_command(chat, parm, *_):
         else:
             console.print('Unrecognized variable')
     else:
-        console.print({k: v for k, v in globals().items() if k.isupper()})
+        console.print({k: v for k, v in globals().items() if k.isupper() and k not in NOPRINT_VARS})
         chat.print_vars()
 
 def copy_command(chat, parm, *_):
@@ -441,10 +424,8 @@ def image_command(_, *text):
     print(f'Clipboard {img_string}\n')
 
     # Use vision model
-    if chat.model.startswith('models/'): # Gemini
-        chat.model = 'models/gemini-pro-vision'
-    else: # GPT-4
-        chat.model = 'gpt-4-vision-preview'
+    if isinstance(chat.model.vision, str):
+        chat.model = conversation.MODELS[chat.model.vision]
     chat.use_tools = False
 
     user_input = img_string
@@ -457,6 +438,12 @@ def exit_command(*_):
     """Exit the application."""
     console.print('Goodbye')
     sys.exit()
+
+def exitc_command(*_):
+    """Exit (crash) the application."""
+    console.print('Crashing...')
+    x, y = 1, 0
+    x = x / y
 
 COMMAND_LIST = (
     'help', 'exit', 'restart', 'undo', 'save', 'load', 'summary', 'history', 'model',
@@ -482,6 +469,7 @@ COMMANDS = []
 COMMANDS = command_pairs(COMMAND_LIST)
 BOT_COMMANDS = command_pairs(BOTS)
 BOT_COMMANDS.extend(command_pairs(b for b in ALL_BOTS if b not in BOTS))
+SECRET_COMMANDS = command_pairs(('exitc',))
 
 def help_command(*_):
     """Print the help screen."""
@@ -506,7 +494,7 @@ def help_command(*_):
     console.print('')
 
 commands = {}
-for cmds in COMMANDS:
+for cmds in COMMANDS+SECRET_COMMANDS:
     string = f'{cmds[0]}_command'
     func = globals()[string]
     for cmd in cmds:

@@ -1,5 +1,5 @@
-variables: {FILENAME: blue, SWITCH: true}
-bots: 
+variables: {FILENAME: blue, SWITCH: false}
+bots:
   blue: Anything that doesn't fit in the other categories.
   fact: Gives encyclopedia entries for things and ideas.
   dictionary: Gives definitions for words and slang.

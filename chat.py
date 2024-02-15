@@ -31,7 +31,7 @@ conversation.DEBUG = DEBUG
 
 BOT_FOLDER = 'bots'
 CHAT_FOLDER = 'chats'
-FILENAME = 'help'
+FILENAME = 'blue'
 FOLDER = BOT_FOLDER
 
 CONFIG_FILE = 'bots'
@@ -49,8 +49,9 @@ except Exception:
 
 SWITCH = True
 FIRST_MESSAGE = True
+MICROPHONE = True
 
-SAVE_VARS = ('USER_NAME', 'FILENAME', 'SWITCH')
+SAVE_VARS = ('USER_NAME', 'FILENAME', 'SWITCH', 'MICROPHONE')
 NOPRINT_VARS = ('ALL_COMMANDS',)
 config = files.load_file(CONFIG)
 BOTS = config['bots']
@@ -351,6 +352,8 @@ def variable_command(chat, parm, *_):
                     else: value = string
             if var.isupper() and var in globals():
                 globals()[var] = value
+                if var in SAVE_VARS:
+                    save_config()
             elif var.islower() and hasattr(chat, var):
                 setattr(chat, var, value)
         else:
@@ -532,7 +535,12 @@ if __name__ == '__main__':
     if console.RICH:
         window_size_thread = threading.Thread(target=watch_window_size, daemon=True)
         window_size_thread.start()
-
+    
+    if MICROPHONE:
+        import microphone
+        microphone_thread = threading.Thread(target=microphone.watch_record_audio, daemon=True)
+        microphone_thread.start()
+    
     last_input_reset = False
     try:
         while True:
@@ -540,9 +548,13 @@ if __name__ == '__main__':
             user_input = chat.input(prefix=(not last_input_reset))
             last_input_reset = False
             if not user_input:
-                screen_reset(chat)
-                last_input_reset = True
-                continue
+                if MICROPHONE and microphone.TEXT:
+                    user_input = microphone.TEXT
+                    microphone.TEXT = ''
+                else:
+                    screen_reset(chat)
+                    last_input_reset = True
+                    continue
             elif user_input.startswith('!'):
                 words = user_input[1:].split(' ') # remove ! and split
                 if words[0] in ALL_COMMANDS:

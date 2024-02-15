@@ -9,3 +9,5 @@ Pillow
 selenium
 bs4
 webdriver-manager
+pynput
+sounddevice

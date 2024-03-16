@@ -6,7 +6,7 @@ import base64
 import json
 from math import ceil
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
 
 import openai
 import tiktoken
@@ -63,12 +63,14 @@ MODEL_LIST = [ # cost: openai/1000, google*4/1000
     # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
     Model(id='models/chat-bison-001', label='Bison', costs=(0.000001, 0.000002),
         context=4096, llm='palm', shortcuts=('b', 'palm', 'bison')),
-    Model(id='models/chat-unicorn-001', label='Unicorn', costs=(0.00004, 0.00003),
-        context=4096, llm='palm', shortcuts=('u', 'unicorn')),
+    # Model(id='models/chat-unicorn-001', label='Unicorn', costs=(0.00004, 0.00003),
+    #     context=4096, llm='palm', shortcuts=('u', 'unicorn')),
     Model(id='models/gemini-pro', label='Gemini', costs=(0.000001, 0.000002),
         context=32768, llm='gemini', shortcuts=('g', 'gemini'), tools=True, vision='models/gemini-pro-vision'),
     Model(id='models/gemini-pro-vision', label='Gemini Vision', costs=(0.000001, 0.000002),
         context=32768, llm='gemini', vision=True),
+    Model(id='models/gemini-ultra', label='Gemini Ultra', costs=(0.000001, 0.000002),
+        context=32768, llm='gemini', shortcuts=('u',), tools=True, vision='models/gemini-ultra-vision'),
 ]
 MODELS = {m.id: m for m in MODEL_LIST}
 
@@ -112,6 +114,20 @@ GEMINI_SAFETY = [
     }
 ]
 
+@dataclass
+class Call:
+    name: str = ''
+    id: str = ''
+    arguments: dict = field(default_factory=dict)
+
+@dataclass
+class Message:
+    role: str
+    content: str = ''
+    tool_calls: list = field(default_factory=list)
+    tool_call_id: str = ''
+    name: str = ''
+
 
 
 
@@ -125,7 +141,7 @@ GEMINI_SAFETY = [
 
 def num_tokens_gemini(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages."""
-    return sum(len(m['content']) // 4 for m in messages if 'content' in m)
+    return sum(len(m.content) // 4 for m in messages)
     # llm_model = genai.GenerativeModel(model)
     # return llm_model.count_tokens(gemini_messages(messages))
 
@@ -135,7 +151,7 @@ def num_tokens_palm(messages, model=MODEL):
         return 0
     return genai.count_message_tokens(
         model=model,
-        context=messages[0]['content'],
+        context=messages[0].content,
         messages=p_m
     )['token_count']
 
@@ -157,10 +173,10 @@ def num_tokens_openai(messages, model=MODEL):
     encoding = tiktoken.encoding_for_model(model)
     num_tokens = 0
     for message in messages:
-        if ('content' in message) and (match := image_pattern.match(message['content'])):
+        if match := image_pattern.match(message.content):
             num_tokens += image_tokens_openai(int(match.group(2)), int(match.group(3)))
         num_tokens += 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
-        for key, value in message.items():
+        for key, value in asdict(message).items():
             if key != 'tool_calls':
                 num_tokens += len(encoding.encode(value))
                 if key == "name":  # if there's a name, the role is omitted
@@ -170,41 +186,37 @@ def num_tokens_openai(messages, model=MODEL):
 
 def call_functions(messages, calls):
     for c in calls:
-        for k, v in c['arguments'].items():
+        for k, v in c.arguments.items():
             if '\n' not in v:
                 if '\\\\n' in v:
-                    c['arguments'][k] = v.replace('\\\\n', '\n')
+                    c.arguments[k] = v.replace('\\\\n', '\n')
                 elif '\\n' in v:
-                    c['arguments'][k] = v.replace('\\n', '\n')
+                    c.arguments[k] = v.replace('\\n', '\n')
 
-    messages.append({
-        "role": "assistant",
-        "tool_calls": calls
-    })
+    messages.append(Message(
+        'assistant', tool_calls=calls
+    ))
 
     for c in calls:
         console.print_function(c)
         
-        name, args, id = c['name'], c['arguments'], c['id']
+        name, args, id = c.name, c.arguments, c.id
         if name in functions.TOOLS:
             # arg_dict = json.loads(args)
             for k, v in args.items():
                 args[k] = v
 
-            if CONFIRM and functions.TOOLS[name]['confirm']:
+            if CONFIRM and functions.TOOLS[name].confirm:
                 console.print('Press enter to confirm...')
                 console.input()
             else:
                 console.print('')
             
-            response = functions.TOOLS[name]['function'](**args)
+            response = functions.TOOLS[name].function(**args)
             
-            messages.append({
-                "role": "tool",
-                "tool_call_id": id,
-                "name": name,
-                "content": response,
-            })
+            messages.append(Message(
+                'tool', response, tool_call_id=id, name=name
+            ))
             console.print('')
 
 def gemini_messages(messages):
@@ -217,8 +229,8 @@ def gemini_messages(messages):
     formatted_messages = []
     system_messages = []
     for m in messages:
-        r = m['role']
-        c = m['content'] if 'content' in m else ''
+        r = m.role
+        c = m.content
         parts = [c]
         if r == 'system':
             system_messages.append(c)
@@ -229,17 +241,17 @@ def gemini_messages(messages):
         elif r == 'tool':
             parts = [
                 glm.Part(function_response = glm.FunctionResponse(
-                    name=m['name'],
+                    name=m.name,
                     response={'result': c}
                 ))
             ]
-        elif 'tool_calls' in m:
+        elif m.tool_calls:
             parts = [
                 glm.Part(function_call = glm.FunctionCall(
-                    name=t['name'],
-                    args=t['arguments']
+                    name=t.name,
+                    args=t.arguments
                 ))
-                for t in m['tool_calls']
+                for t in m.tool_calls
             ]
 
         if match := image_pattern.match(c):
@@ -264,26 +276,26 @@ def gemini_messages(messages):
 
 def palm_messages(messages):
     return [
-        {'author': m['role'], 'content': m['content']}
-        for m in messages if m['role'] != 'system'
+        {'author': m.role, 'content': m.content}
+        for m in messages if m.role != 'system'
     ]
 
 def openai_messages(messages):
     formatted_messages = []
     for m in messages:
-        if 'tool_calls' in m:
+        if m.tool_calls:
             formatted_messages.append({
-                'role': m['role'],
+                'role': m.role,
                 'tool_calls': [
                     {
-                        'id': t['id'],
+                        'id': t.id,
                         'type': 'function',
-                        'function': { 'name': t['name'], 'arguments': json.dumps(t['arguments']) }
+                        'function': { 'name': t.name, 'arguments': json.dumps(t.arguments) }
                     }
-                    for t in m['tool_calls']
+                    for t in m.tool_calls
                 ]
             })
-        elif match := image_pattern.match(m['content']):
+        elif match := image_pattern.match(m.content):
             file, _, _, text = match.groups()
             if not file.startswith('http'): # local
                 try:
@@ -292,15 +304,17 @@ def openai_messages(messages):
                         file = f"data:image/{file.split('.')[1]};base64,{base64_image}"
                 except OSError as e:
                     console.print(e)
-                    formatted_messages.append(m)
+                    formatted_messages.append({k: v for k, v in asdict(m).items() if v})
                     continue
-            new = m.copy()
+            new = {k: v for k, v in asdict(m).items() if v}
             new['content'] = [{"type": "image_url", "image_url": {"url": file}}]
             if text:
                 new['content'].insert(0, {"type": "text", "text": text})
             formatted_messages.append(new)
         else:
-            formatted_messages.append(m)
+            d = {k: v for k, v in asdict(m).items() if v}
+            if m.role == 'tool' and m.content == '': d['content'] = ''
+            formatted_messages.append(d)
     return formatted_messages
 
 def stream_gemini(llm_model, response, messages, **kwargs):
@@ -313,16 +327,16 @@ def stream_gemini(llm_model, response, messages, **kwargs):
                 for n, tc in enumerate(chunk.parts):
                     func = tc.function_call
                     while len(func_calls) <= n: # Extend if necessary
-                        func_calls.append({'arguments': {}})
+                        func_calls.append(Call())
                     if func:                        
-                        func_calls[n]['name'] = func.name
+                        func_calls[n].name = func.name
                         for k, v in func.args.items():
-                            if k in func_calls[n]['arguments']:
-                                func_calls[n]['arguments'][k] += v
+                            if k in func_calls[n].arguments:
+                                func_calls[n].arguments[k] += v
                             else:
-                                func_calls[n]['arguments'][k] = v
+                                func_calls[n].arguments[k] = v
                         if 'id' not in func_calls[n]:
-                            func_calls[n]['id'] = 'call_'+''.join(random.choices(alpha, k=4))
+                            func_calls[n].id = 'call_'+''.join(random.choices(alpha, k=4))
             else:
                 yield chunk.text if chunk.parts.pb else ''
         
@@ -368,7 +382,7 @@ def chat_palm(messages, model, temperature, print_result):
     with console.status('Getting response from Google...'):
         response = genai.chat(
             model=model,
-            context=messages[0]['content'],
+            context=messages[0].content,
             messages=llm_messages,
             temperature=temperature
         )
@@ -383,17 +397,17 @@ def stream_openai(response, messages, **kwargs):
             if delta.tool_calls:
                 for n, tc in enumerate(delta.tool_calls):
                     while len(func_calls) <= n: # Extend if necessary
-                        func_calls.append({'arguments': ''})
-                    if tc.id: func_calls[n]["id"] = tc.id
+                        func_calls.append(Call(arguments=''))
+                    if tc.id: func_calls[n].id = tc.id
                     if tc.function:
-                        if tc.function.name: func_calls[n]['name'] = tc.function.name
-                        if tc.function.arguments: func_calls[n]["arguments"] += tc.function.arguments
+                        if tc.function.name: func_calls[n].name = tc.function.name
+                        if tc.function.arguments: func_calls[n].arguments += tc.function.arguments
             else:
                 yield delta.content if delta.content else ''
 
         if func_calls: # Call the functions and run model again
             for f in func_calls:
-                f['arguments'] = functions.get_args(f['name'], f['arguments'])
+                f.arguments = functions.get_args(f.name, f.arguments)
             call_functions(messages, func_calls)
             kwargs['messages'] = openai_messages(messages)
             response = openai.chat.completions.create(**kwargs)
@@ -442,7 +456,7 @@ def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=No
             return response
         except Exception as e:
             if n == 0: # Only fully print exception on first try
-                console.print_exception(e)
+                console.print_exception(e, show_locals=True)
             else:
                 console.print(e)
             
@@ -454,8 +468,8 @@ def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=No
 
 def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODELS[MODEL]):
     complete_messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_request }
+        Message('system', system),
+        Message('user', user_request)
     ]
     answer = ''
     for p in chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result, model=model):
@@ -494,7 +508,7 @@ class Conversation:
         self.ai_name = ai
         self.seed = seed
 
-        self.messages = [{"role": "system", "content": "You are a helpful assistant."}]
+        self.messages = [Message('system', 'You are a helpful assistant.')]
         self.history = []
 
         self.reset(filename=filename, system=system)
@@ -520,7 +534,7 @@ class Conversation:
             self.ai_name = ai
 
         if system:
-            self.messages = [{"role": "system", "content": system}]
+            self.messages = [Message('system', system)]
             self.history = []
         elif filename:
             if not self.load(filename):
@@ -561,22 +575,22 @@ class Conversation:
     def messages_string(self, messages, divider='\n'):
         strings = []
         for m in messages:
-            r = m['role']
+            r = m.role
             if r == 'system':
-                s = m['content']
+                s = m.content
             elif r == 'user':
-                s = f"{self.user_name}: {m['content']}"
+                s = f'{self.user_name}: {m.content}'
             elif r == 'assistant':
-                if 'content' in m:
-                    s = f"{self.ai_name}: {m['content']}"
-                elif 'tool_calls' in m:
-                    s = f"{self.ai_name}: "
-                    for t in m['tool_calls']:
-                        s += t['name']
-                        for k, v in t['arguments'].items():
-                            s += f"\n{k}: {v}"
+                if m.content:
+                    s = f'{self.ai_name}: {m.content}'
+                elif m.tool_calls:
+                    s = f'{self.ai_name}: '
+                    for t in m.tool_calls:
+                        s += t.name
+                        for k, v in t.arguments.items():
+                            s += f'\n{k}: {v}'
             elif r == 'tool':
-                s = f"{m['name']}: {m['content']}".rstrip('\n')
+                s = f"{m.name}: {m.content}".rstrip('\n')
             strings.append(s)
         return divider.join(strings)
 
@@ -585,36 +599,36 @@ class Conversation:
         if last == None: last = len(self.messages)
         g = [
             m for m in self.messages[:first+1]
-            if m['role'] in ('user', 'assistant')
-            and 'content' in m
+            if m.role in ('user', 'assistant')
+            and m.content
         ]
         n = len(g)
         f = False
         for m in self.messages[first:last]:
             p = None
-            if m['role'] == 'system':
+            if m.role == 'system':
                 p = '[bold]System:' if n == 0 else f'[bold]Summary {n}:'
-            elif m['role'] == 'user':
+            elif m.role == 'user':
                 p = self.user_prefix(n)
-            elif m['role'] == 'assistant':
-                if 'tool_calls' in m:
+            elif m.role == 'assistant':
+                if m.tool_calls:
                     console.print(self.ai_prefix(n))
-                    for c in m['tool_calls']:
+                    for c in m.tool_calls:
                         console.print_function(c)
                     n += 1
                 else:
                     if f:
-                        console.print_markdown(m['content'])
+                        console.print_markdown(m.content)
                         f = False
                     else:
                         p = self.ai_prefix(n)
-            elif m['role'] == 'tool':
-                console.print_output(m['content'])
+            elif m.role == 'tool':
+                console.print_output(m.content)
                 f = True
 
             if p:
                 console.print(p)
-                console.print_markdown(m['content'])
+                console.print_markdown(m.content)
                 n += 1
             
             console.print('') # blank line
@@ -623,8 +637,8 @@ class Conversation:
         if not messages:
             if system and user:
                 messages = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user}
+                    Message('system', system),
+                    Message('user', user)
                 ]
             else:
                 messages=self.messages
@@ -633,7 +647,7 @@ class Conversation:
             console.print(prefix)
 
         answer = chat_complete(messages, model=self.model, max_tokens=self.max_tokens, print_result=print_result, seed=self.seed, use_tools=use_tools)
-        answer_list = [{"role": "assistant", "content": answer}]
+        answer_list = [Message('assistant', answer)]
 
         in_cost, out_cost = self.model.costs
         cost = self.__num_tokens()*in_cost + self.__num_tokens(answer_list)*out_cost # prompt cost + response cost
@@ -656,11 +670,11 @@ class Conversation:
 
         else: # If self.summarize = False, just forget oldest messages
             while self.__num_tokens() > self.max_chat_tokens:
-                last = self.messages[1]['content']
+                last = self.messages[1].content
                 if DEBUG: console.log(f'<Forgetting: {last}>')
                 del self.messages[1]
 
-        message = {"role": "user", "content": user_input}
+        message = Message('user', user_input)
         self.messages.append(message)
         self.history.append(message)
 
@@ -672,7 +686,7 @@ class Conversation:
             self.history.pop()
             return False
 
-        message = { "role": "assistant", "content": answer }
+        message = Message('assistant', answer)
         self.messages.append(message)
         self.history.append(message)
 
@@ -718,9 +732,9 @@ class Conversation:
 
         if delete: # if messages were deleted, update summary
             if self.summarized: # Already summarized? Replace old summary system message
-                self.messages[1] = {"role": "system", "content": summary}
+                self.messages[1] = Message('system', summary)
             else: # Add a new summary system message
-                self.messages.insert(1, {"role": "system", "content": summary})
+                self.messages.insert(1, Message('system', summary))
                 self.summarized = True
 
         return summary, cost
@@ -730,6 +744,15 @@ class Conversation:
         if not data:
             console.print(f"Error: Couldn't load file {filename}")
             return False
+        
+        def to_messages(dicts):
+            ret = []
+            for d in dicts:
+                m = Message(**d)
+                if m.tool_calls:
+                    m.tool_calls = [Call(**t) for t in m.tool_calls]
+                ret.append(m)
+            return ret
 
         self.messages, self.history = [], []
 
@@ -743,53 +766,66 @@ class Conversation:
                         elif x not in NOSAVE_VARS: # Don't restore these
                             setattr(self, x, y)
                 elif k == 'messages':
-                    self.messages = v
+                    self.messages = to_messages(v)
                 elif k == 'history':
-                    self.history = v
+                    self.history = to_messages(v)
                 elif k == 'date':
                     pass
                 else:
                     console.print('Error: Unknown key in loaded dictionary')
         elif isinstance(data, list): # List of messages format
-            self.messages = data
+            self.messages = to_messages(data)
         else:
             console.print('Error: Unknown Data save format')
         
         if DEBUG:
             self.print_vars()
 
-        self.messages[0]['content'] = self.messages[0]['content'].format(
+        self.messages[0].content = self.messages[0].content.format(
             USER_NAME=self.user_name,
             AI_NAME=self.ai_name,
             TODAY=files.TODAY
         )
 
         if self.history == []: # No history? Copy from messages
-            self.history = [m for m in self.messages if m['role'] != 'system']
+            self.history = [m for m in self.messages if m.role != 'system']
 
         else: # We have history. Connect to messages so they are in sync
-            n = 1 # While messages are identical...
-            while n < len(self.history) and self.history[-n] == self.messages[-n]:
-                self.history[-n] = self.messages[-n] # ...reassign so they are the same object
-                n += 1
+            i = len(self.messages)
+            for h in reversed(self.history):
+                while i > 0:
+                    i -= 1
+                    if h == self.messages[i]:
+                        self.messages[i] = h
+                        break
 
-        if self.messages[-1]['role'] == 'user': # If last response is user...
+        if self.messages[-1].role == 'user': # If last response is user...
             self.messages.pop() # Remove it so user can respond
             self.history.pop() # History too
 
         if len(self.messages) > 1:
-            if self.messages[1]['role'] == 'system': # Second messages is system...
+            if self.messages[1].role == 'system': # Second messages is system...
                 self.summarize = True
                 self.summarized = True
 
         return filename
 
     def save(self, filename):
+        def to_dicts(messages):
+            ret = []
+            for m in messages:
+                d = {k: v for k, v in asdict(m).items() if v}
+                ret.append(d)
+            return ret
+
         # Class instance variables except messages and history (those are listed separate)
         variables = {k: v for k, v in vars(self).items() if k not in NOSAVE_VARS}
         variables['model'] = self.model.id
         date = datetime.now()
-        data = {'date': date, 'variables': variables, 'messages': self.messages, 'history': self.history}
+        data = {'date': date, 'variables': variables,
+            'messages': to_dicts(self.messages),
+            'history': to_dicts(self.history)
+        }
 
         files.save_file(data, filename)
 

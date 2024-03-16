@@ -3,6 +3,8 @@ import sys
 import traceback
 import json
 import subprocess
+from dataclasses import dataclass
+from typing import Callable
 
 import pyperclip
 
@@ -115,7 +117,7 @@ def get_args(name, string):
     try:
         args = json.loads(string)
     except:
-        args = {TOOLS[name]['parameters'][0]['name']: string}
+        args = {TOOLS[name].parameters[0]['name']: string}
     return args
 
 
@@ -129,39 +131,42 @@ def get_args(name, string):
 ##     ## ##       ##        ##  ##   ###  ##     ##     ##  ##     ## ##   ### ##    ##
 ########  ######## ##       #### ##    ## ####    ##    ####  #######  ##    ##  ######
 
-TOOLS = {
-    'python': {
-        'description': "Runs the Python source code with exec() and returns the standard output that was printed with print(). Code can and use packages as necessary",
-        'parameters': [{
+@dataclass
+class Tool:
+    name: str
+    description: str
+    function: Callable[..., str]
+    parameters: tuple = ()
+    confirm: bool = False
+    enabled: bool = True
+
+TOOL_LIST = [
+    Tool(
+        name='python', function=execute, confirm=True, enabled=True,
+        description="Runs the Python source code with exec() and returns the standard output that was printed with print(). Code can and use packages as necessary",
+        parameters=[{
             'name': 'python_code',
             'description': "The python source code to be executed",
             'type': str,
             'required': True
-        }],
-        'confirm': True,
-        'function': execute,
-        'enabled': True
-    },
-    'browse': {
-        'description': "Browses to the given url and extracts the text from the website using BeautifulSoup",
-        'parameters': [{
+        }]
+    ),
+    Tool(
+        name='browse', function=browse, confirm=False, enabled=True,
+        description="Browses to the given url and extracts the text from the website using BeautifulSoup",
+        parameters=[{
             'name': 'url',
             'description': "The url of the website to be retrieved",
             'type': str,
             'required': True
-        }],
-        'confirm': False,
-        'function': browse,
-        'enabled': True
-    },
-    'clipboard': {
-        'description': "Lets the user copy something to the clipboard and sends it back to you",
-        'parameters': [],
-        'confirm': True,
-        'function': clipboard,
-        'enabled': False
-    }
-}
+        }]
+    ),
+    Tool(
+        name='clipboard', function=clipboard, confirm=True, enabled=False,
+        description="Lets the user copy something to the clipboard and sends it back to you",
+    ),
+]
+TOOLS = {t.name: t for t in TOOL_LIST}
 
 def tools_gemini():
     return [
@@ -169,26 +174,26 @@ def tools_gemini():
             function_declarations=[
                 glm.FunctionDeclaration(
                     name=n,
-                    description=f['description'],
+                    description=f.description,
                     parameters=glm.Schema(
                         type=glm.Type.OBJECT,
                         properties={
                             p['name']: glm.Schema(type=glm.Type.STRING)
-                            for p in f['parameters']
+                            for p in f.parameters
                         },
                         required=[
                             p['name']
-                            for p in f['parameters']
+                            for p in f.parameters
                             if p['required']
                         ]
                     )
                 )
-                if f['parameters'] else
+                if f.parameters else
                 glm.FunctionDeclaration(
                     name=n,
-                    description=f['description']
+                    description=f.description
                 )
-                for n, f in TOOLS.items() if f['enabled']
+                for n, f in TOOLS.items() if f.enabled
             ]
         )
     ]
@@ -199,22 +204,22 @@ def tools_openai():
             "type": "function",
             "function": {
                 "name": n,
-                "description": f['description'],
+                "description": f.description,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         p['name']: {"type": "string", "description": p['description']}
-                        for p in f['parameters']
+                        for p in f.parameters
                     },
                     "required": [
                         p['name']
-                        for p in f['parameters']
+                        for p in f.parameters
                         if p['required']
                     ]
                 }
-                if f['parameters'] else {}
+                if f.parameters else {}
             }
         }
-        for n, f in TOOLS.items() if f['enabled']
+        for n, f in TOOLS.items() if f.enabled
     ]
 

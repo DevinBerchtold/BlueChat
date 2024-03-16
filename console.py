@@ -258,9 +258,9 @@ def print_filename(filename):
             s = f'[od.dim]{folder} /[/] [bold]{f}'
     print_rule(s)
 
-def print_function(func):
-    print_markdown(f"**{func['name']}:**")
-    for k, v in func['arguments'].items():
+def print_function(call):
+    print_markdown(f"**{call.name}:**")
+    for k, v in call.arguments.items():
         if k == 'python_code':
             print_markdown(f'```python\n{v}\n```')
         else:

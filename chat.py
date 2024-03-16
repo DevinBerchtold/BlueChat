@@ -206,8 +206,8 @@ def restart_command(chat, *_):
 
 def undo_messages(messages):
     for i, m in enumerate(reversed(messages), 1):
-        if m['role'] == 'user': # Search for the last user message
-            c = m['content']
+        if m.role == 'user': # Search for the last user message
+            c = m.content
             del messages[-i:]
             return i, c # Return number removed and user content
 
@@ -377,16 +377,15 @@ def copy_command(chat, parm, *_):
             n = len(chat.messages)
         elif parm in ('code', 'c'):
             for m in reversed(chat.messages):
-                if 'tool_calls' in m:
-                    for t in m['tool_calls']:
+                if m.tool_calls:
+                    for t in m.tool_calls:
                         if t['name'] == 'Evaluate':
                             pyperclip.copy(t['arguments']['python_code'])
                             console.print(f'Copied evaluate code block to clipboard\n')
                             return
-                elif 'content' in m:
-                    text = m['content']
+                elif m.content:
                     pattern = r'```[a-z]+\s*([\s\S]*?)\s*```'
-                    matches = re.findall(pattern, text)
+                    matches = re.findall(pattern, m.content)
                     if matches:
                         pyperclip.copy('\n\n'.join(matches))
                         console.print(f'Copied {len(matches)} code blocks to clipboard\n')

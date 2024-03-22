@@ -12,6 +12,7 @@ import openai
 import tiktoken
 import google.generativeai as genai
 import google.ai.generativelanguage as glm
+import anthropic
 from PIL import Image
 
 import files
@@ -71,6 +72,9 @@ MODEL_LIST = [ # cost: openai/1000, google*4/1000
         context=32768, llm='gemini', vision=True),
     Model(id='models/gemini-ultra', label='Gemini Ultra', costs=(0.000001, 0.000002),
         context=32768, llm='gemini', shortcuts=('u',), tools=True, vision='models/gemini-ultra-vision'),
+    # https://www.anthropic.com/api
+    Model(id='claude-3-opus-20240229', label='Claude 3', costs=(0.000015, 0.000075),
+        context=200000, llm='anthropic', shortcuts=('c', 'claude'), tools=False),
 ]
 MODELS = {m.id: m for m in MODEL_LIST}
 
@@ -94,6 +98,8 @@ if "GOOGLE_API_KEY" in os.environ:
     genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 else:
     genai.configure(api_key=os.environ["PALM_API_KEY"])
+
+anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 GEMINI_SAFETY = [
     {
@@ -183,6 +189,10 @@ def num_tokens_openai(messages, model=MODEL):
                     num_tokens += -1  # role is always required and always 1 token
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
+
+def num_tokens_anthropic(messages, model=MODEL):
+    """Returns the number of tokens used by a list of messages."""
+    return sum(len(m.content) // 4 for m in messages)
 
 def call_functions(messages, calls):
     for c in calls:
@@ -317,6 +327,15 @@ def openai_messages(messages):
             formatted_messages.append(d)
     return formatted_messages
 
+def anthropic_messages(messages):
+    formatted_messages = []
+    for m in messages:
+        if m.role != 'system':
+            d = {k: v for k, v in asdict(m).items() if v}
+            if m.role == 'tool' and m.content == '': d['content'] = ''
+            formatted_messages.append(d)
+    return formatted_messages
+
 def stream_gemini(llm_model, response, messages, **kwargs):
     """Stream chunks from content messages while detecting and executing function calls."""
     alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
@@ -439,6 +458,42 @@ def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_re
     else:
         return response.choices[0].message.content, False
 
+def stream_anthropic(response, messages, **kwargs):
+    """Stream chunks from content messages while detecting and executing function calls."""
+    for chunk in response:
+        if chunk.type == 'content_block_delta':
+            yield chunk.delta.text if chunk.delta.text else ''
+
+def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
+    llm_messages = anthropic_messages(messages)
+    if DEBUG: console.print(llm_messages)
+    kwargs = {
+        'model': model,
+        'messages': llm_messages,
+        'stream': stream,
+        'max_tokens': max_tokens
+    }
+    if max_tokens: kwargs['max_tokens'] = max_tokens
+    else: kwargs['max_tokens'] = 1000
+
+    if messages[0].role == 'system': kwargs['system'] = messages[0].content
+    
+    if temperature: kwargs['temperature'] = temperature
+
+    # if use_tools: kwargs['tools'] = functions.tools_anthropic()
+    
+    if print_result:
+        with console.status('Connecting to Anthropic...'):
+            response = anthropic_client.messages.create(**kwargs) # New syntax
+    else:
+        response = anthropic_client.messages.create(**kwargs) # New syntax
+    
+    if use_tools or stream:
+        del kwargs['messages']
+        return console.print_stream(stream_anthropic(response, messages, **kwargs)), True
+    else:
+        return response.content[0].text, False
+
 def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
     for n in range(API_TRIES): # 0, 1, 2, ..., n
         try:
@@ -447,6 +502,8 @@ def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=No
                 response, printed = chat_gemini(messages, model.id, temperature, max_tokens, stream, print_result, use_tools)
             elif model.llm == 'palm':
                 response, printed = chat_palm(messages, model.id, temperature, print_result)
+            elif model.llm == 'anthropic':
+                response, printed = chat_anthropic(messages, model.id, temperature, max_tokens, stream, False, print_result, False)
             else: # OpenAI
                 if model.id == 'gpt-4-vision-preview' and max_tokens is None:
                     max_tokens = 2000 # Override low default for vision
@@ -559,6 +616,8 @@ class Conversation:
             return num_tokens_gemini(messages, self.model.id)
         elif self.model.llm == 'palm':
             return num_tokens_palm(messages, self.model.id)
+        elif self.model.llm == 'anthropic':
+            return num_tokens_anthropic(messages, self.model.id)
         else:
             return num_tokens_openai(messages, self.model.id)
 

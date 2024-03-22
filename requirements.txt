@@ -2,6 +2,7 @@
 openai
 tiktoken
 google.generativeai
+anthropic
 rich
 pyperclip
 pyyaml

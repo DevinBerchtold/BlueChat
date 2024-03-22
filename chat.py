@@ -267,7 +267,7 @@ def load_command(chat, filename, *_):
         console.print('Error: No filename specified')
 
 def model_command(chat, model, reset):
-    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Model can be 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*b*ison'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
+    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Valid values for `model` are 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*c*laude'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
     if model in conversation.MODEL_SHORTCUTS:
         model_id = conversation.MODEL_SHORTCUTS[model]
         mod = conversation.MODELS[model_id]
@@ -286,7 +286,7 @@ def model_command(chat, model, reset):
     console.print(f"Model={chat.model}")
 
 def tools_command(chat, tool, *_):
-    """Toggle tool usage for `tool` if specified. Otherwise, toggle tool usage for all tools."""
+    """Toggle tool usage for `tool` if specified. Otherwise, toggle tool usage for all tools. Valid values for `tool` are 'python' and 'browse'."""
     if tool:
         if tool in functions.TOOLS:
             functions.TOOLS[tool]['enabled'] = not functions.TOOLS[tool]['enabled']

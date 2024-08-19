@@ -1,5 +1,5 @@
 date: 2023-04-18 22:13:49.130834
-variables: {model: gpt-3.5-turbo, user_name: Devin, ai_name: CodeBot, max_tokens: 500, token_warning: 250, cost: 0.07308, summarize: true, summarize_len: 250}
+variables: {model: gpt-4o, user_name: Devin, ai_name: CodeBot, max_tokens: 500, token_warning: 250, cost: 0.07308, summarize: true, summarize_len: 250}
 messages:
 - role: system
   content: You are a programming assistant. For complex code, write an explanation or pseudocode before giving an example. The language is probably Python if not specified.

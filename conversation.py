@@ -7,6 +7,7 @@ import json
 from math import ceil
 import random
 from dataclasses import dataclass, field, asdict
+from string import ascii_letters, digits
 
 import openai
 import tiktoken
@@ -49,36 +50,45 @@ class Model:
         for s in (*self.shortcuts, self.id):
             if s not in MODEL_SHORTCUTS: MODEL_SHORTCUTS[s] = self.id
 
-MODEL_LIST = [ # cost: openai/1000, google*4/1000
+MODEL_LIST = [ # cost: dollars per million tokens
     # https://openai.com/pricing
-    Model(id='gpt-3.5-turbo', label='GPT-3.5', costs=(0.0000005, 0.0000015),
+    Model(id='gpt-3.5-turbo-0125', label='GPT-3.5', costs=(0.5, 1.5),
         context=16385, llm='openai', shortcuts=('3', '3.5', 'gpt-3'), tools=True),
-    Model(id='gpt-4', label='GPT-4', costs=(0.00003, 0.00006),
+    Model(id='gpt-4', label='GPT-4', costs=(30.0, 60.0),
         context=8192, llm='openai', tools=True),
-    Model(id='gpt-4-32k', label='GPT-4 32k', costs=(0.00006, 0.00012),
-        context=32768, llm='openai', shortcuts=('32', '32k')),
-    Model(id='gpt-4-turbo-preview', label='GPT-4 Turbo', costs=(0.00001, 0.00003),
-        context=128000, llm='openai', shortcuts=('4', 'gpt-4-turbo'), tools=True, vision='gpt-4-vision-preview'),
-    Model(id='gpt-4-vision-preview', label='GPT-4 Vision', costs=(0.00001, 0.00003),
-        context=128000, llm='openai', vision=True),
+    Model(id='gpt-4o', label='GPT-4o', costs=(5.0, 15.0),
+        context=128000, llm='openai', shortcuts=('gpt', '4', '4o'), tools=True, vision=True),
+    Model(id='gpt-4o-mini', label='GPT-4o Mini', costs=(0.15, 0.6),
+        context=128000, llm='openai', shortcuts=('m', 'mini'), tools=True, vision=True),
     # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
-    Model(id='models/chat-bison-001', label='Bison', costs=(0.000001, 0.000002),
-        context=4096, llm='palm', shortcuts=('b', 'palm', 'bison')),
-    # Model(id='models/chat-unicorn-001', label='Unicorn', costs=(0.00004, 0.00003),
-    #     context=4096, llm='palm', shortcuts=('u', 'unicorn')),
-    Model(id='models/gemini-pro', label='Gemini', costs=(0.000001, 0.000002),
-        context=32768, llm='gemini', shortcuts=('g', 'gemini'), tools=True, vision='models/gemini-pro-vision'),
-    Model(id='models/gemini-pro-vision', label='Gemini Vision', costs=(0.000001, 0.000002),
-        context=32768, llm='gemini', vision=True),
-    Model(id='models/gemini-ultra', label='Gemini Ultra', costs=(0.000001, 0.000002),
-        context=32768, llm='gemini', shortcuts=('u',), tools=True, vision='models/gemini-ultra-vision'),
-    # https://www.anthropic.com/api
-    Model(id='claude-3-opus-20240229', label='Claude 3', costs=(0.000015, 0.000075),
-        context=200000, llm='anthropic', shortcuts=('c', 'claude'), tools=False),
+    # https://ai.google.dev/pricing
+    Model(id='models/gemini-1.5-pro', label='Gemini 1.5', costs=(5.0, 15.0),
+        context=1048576, llm='gemini', shortcuts=('g', 'gemini', 'pro', '15'), tools=True, vision=True),
+    Model(id='models/gemini-1.5-flash', label='Gemini 1.5 Flash', costs=(0.075, 0.3),
+        context=1048576, llm='gemini', shortcuts=('f', 'flash'), tools=False, vision=True),
+    # https://www.anthropic.com/pricing#anthropic-api
+    Model(id='claude-3-opus-20240229', label='Claude 3', costs=(15.0, 75.0),
+        context=200000, llm='anthropic', shortcuts=('o', 'opus'), tools=True),
+    Model(id='claude-3-5-sonnet-20240620', label='Claude 3.5', costs=(3.0, 15.0),
+        context=200000, llm='anthropic', shortcuts=('c', 'claude', 's', 'sonnet'), tools=True, vision=True),
 ]
 MODELS = {m.id: m for m in MODEL_LIST}
 
-MODEL = "gpt-4-turbo-preview" # Cheaper, Faster (?) GPT-4
+def get_model(id):
+    if id in MODELS:
+        return MODELS[id]
+    if id in MODEL_SHORTCUTS:
+        return MODELS[MODEL_SHORTCUTS[id]]
+    if id.startswith('gpt'):
+        return Model(id=id, label=id, costs=(5.0, 15.0), context=128000, llm='openai'),
+    if id.startswith('models/gemini'):
+        return Model(id=id, label=id, costs=(5.0, 15.0), context=1048576, llm='gemini'),
+    if id.startswith('claude'):
+        return Model(id=id, label=id, costs=(3.0, 15.0), context=200000, llm='anthropic'),
+    else:
+        return False
+
+MODEL = 'gpt-4o'
 USE_TOOLS = True
 CONFIRM = True
 STREAM = True
@@ -147,19 +157,16 @@ class Message:
 
 def num_tokens_gemini(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages."""
-    return sum(len(m.content) // 4 for m in messages)
-    # llm_model = genai.GenerativeModel(model)
-    # return llm_model.count_tokens(gemini_messages(messages))
-
-def num_tokens_palm(messages, model=MODEL):
-    p_m = palm_messages(messages)
-    if len(p_m) == 0:
+    # return sum(len(m.content) // 4 for m in messages)
+    if messages:
+        llm_model = genai.GenerativeModel(model, system_instruction=messages[0].content)
+    else:
+        llm_model = genai.GenerativeModel(model)
+    formatted_messages = gemini_messages(messages)
+    if formatted_messages:
+        return llm_model.count_tokens(formatted_messages).total_tokens
+    else:
         return 0
-    return genai.count_message_tokens(
-        model=model,
-        context=messages[0].content,
-        messages=p_m
-    )['token_count']
 
 def image_tokens_openai(w, h, detail='auto'):
     if detail == 'low' or not w or not h:
@@ -284,12 +291,6 @@ def gemini_messages(messages):
             })
     return formatted_messages
 
-def palm_messages(messages):
-    return [
-        {'author': m.role, 'content': m.content}
-        for m in messages if m.role != 'system'
-    ]
-
 def openai_messages(messages):
     formatted_messages = []
     for m in messages:
@@ -330,15 +331,40 @@ def openai_messages(messages):
 def anthropic_messages(messages):
     formatted_messages = []
     for m in messages:
-        if m.role != 'system':
-            d = {k: v for k, v in asdict(m).items() if v}
-            if m.role == 'tool' and m.content == '': d['content'] = ''
-            formatted_messages.append(d)
+        if m.tool_calls:
+            content = []
+            if m.content:
+                content = [{
+                    'type': 'text',
+                    'text': m.content
+                }]
+            formatted_messages.append({
+                'role': m.role,
+                'content': content + [{
+                    'type': 'tool_use',
+                    'id': t.id,
+                    'name': t.name,
+                    'input': t.arguments
+                } for t in m.tool_calls]
+            })
+        elif m.role != 'system':
+            if m.role == 'tool' and m.content:
+                formatted_messages.append({
+                    'role': 'user',
+                    'content': [{
+                        'type': 'tool_result',
+                        'tool_use_id': m.tool_call_id,
+                        'content': m.content
+                    }]
+                })
+            else:
+                d = {k: v for k, v in asdict(m).items() if v}
+                if m.role == 'tool' and m.content == '': d['content'] = ''
+                formatted_messages.append(d)
     return formatted_messages
 
 def stream_gemini(llm_model, response, messages, **kwargs):
     """Stream chunks from content messages while detecting and executing function calls."""
-    alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     while True:
         func_calls = []
         for chunk in response:
@@ -354,8 +380,9 @@ def stream_gemini(llm_model, response, messages, **kwargs):
                                 func_calls[n].arguments[k] += v
                             else:
                                 func_calls[n].arguments[k] = v
-                        if 'id' not in func_calls[n]:
-                            func_calls[n].id = 'call_'+''.join(random.choices(alpha, k=4))
+                        if not func_calls[n].id:
+                            rand = random.choices(ascii_letters+digits, k=4)
+                            func_calls[n].id = 'call_' + ''.join(rand)
             else:
                 yield chunk.text if chunk.parts.pb else ''
         
@@ -394,18 +421,6 @@ def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, 
         return console.print_stream(stream_gemini(llm_model, response, messages, **kwargs)), True
     else:
         return response.text, False
-
-def chat_palm(messages, model, temperature, print_result):
-    llm_messages = palm_messages(messages)
-    if DEBUG: console.print(llm_messages)
-    with console.status('Getting response from Google...'):
-        response = genai.chat(
-            model=model,
-            context=messages[0].content,
-            messages=llm_messages,
-            temperature=temperature
-        )
-    return response.last, False
 
 def stream_openai(response, messages, **kwargs):
     """Stream chunks from content messages while detecting and executing function calls."""
@@ -467,6 +482,10 @@ def stream_anthropic(response, messages, **kwargs):
 def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = anthropic_messages(messages)
     if DEBUG: console.print(llm_messages)
+
+    if use_tools: # Anthropic stream+tools not currently supported
+        stream = False
+
     kwargs = {
         'model': model,
         'messages': llm_messages,
@@ -480,7 +499,7 @@ def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print
     
     if temperature: kwargs['temperature'] = temperature
 
-    # if use_tools: kwargs['tools'] = functions.tools_anthropic()
+    if use_tools: kwargs['tools'] = functions.tools_anthropic()
     
     if print_result:
         with console.status('Connecting to Anthropic...'):
@@ -488,25 +507,37 @@ def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print
     else:
         response = anthropic_client.messages.create(**kwargs) # New syntax
     
-    if use_tools or stream:
+    if stream:
         del kwargs['messages']
         return console.print_stream(stream_anthropic(response, messages, **kwargs)), True
     else:
-        return response.content[0].text, False
+        if response.stop_reason == 'tool_use':
+            ret = ''
+            for c in response.content:
+                if c.type == 'text':
+                    ret += c.text
+                elif c.type == 'tool_use':
+                    input_dict = c.input
+                    calls = [ Call(name=c.name, id=c.id, arguments=input_dict) ]
+                    call_functions(messages, calls)
+                    kwargs['messages'] = anthropic_messages(messages)
+                    kwargs['messages'][-2]['content'][0]['input'] = input_dict
+                    kwargs['messages'][-2]['content'].insert(0, {'type': 'text', 'text': ret})
+                    response = anthropic_client.messages.create(**kwargs)
+                    ret += response.content[0].text
+            return ret, False
+        else:
+            return response.content[0].text, False
 
-def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
+def chat_complete(messages, model=get_model(MODEL), temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
     for n in range(API_TRIES): # 0, 1, 2, ..., n
         try:
             stream = (STREAM and print_result)
             if model.llm == 'gemini':
                 response, printed = chat_gemini(messages, model.id, temperature, max_tokens, stream, print_result, use_tools)
-            elif model.llm == 'palm':
-                response, printed = chat_palm(messages, model.id, temperature, print_result)
             elif model.llm == 'anthropic':
-                response, printed = chat_anthropic(messages, model.id, temperature, max_tokens, stream, False, print_result, False)
+                response, printed = chat_anthropic(messages, model.id, temperature, max_tokens, stream, False, print_result, use_tools)
             else: # OpenAI
-                if model.id == 'gpt-4-vision-preview' and max_tokens is None:
-                    max_tokens = 2000 # Override low default for vision
                 response, printed = chat_openai(messages, model.id, temperature, max_tokens, stream, seed, print_result, use_tools)
             if not printed:
                 console.print_markdown(response)
@@ -523,7 +554,7 @@ def chat_complete(messages, model=MODELS[MODEL], temperature=None, max_tokens=No
 
     raise ConnectionError(f"Failed to access LLM API after {API_TRIES} attempts.")
 
-def get_complete(system, user_request, max_tokens=None, print_result=True, model=MODELS[MODEL]):
+def get_complete(system, user_request, max_tokens=None, print_result=True, model=get_model(MODEL)):
     complete_messages = [
         Message('system', system),
         Message('user', user_request)
@@ -558,7 +589,7 @@ def get_summary(request):
 
 class Conversation:
     def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None, use_tools=USE_TOOLS, confirm=True):
-        self.model = MODELS[model]
+        self.model = get_model(model)
         self.use_tools = use_tools
         self.confirm = confirm
         self.user_name = user
@@ -573,14 +604,15 @@ class Conversation:
     def reset(self, filename=None, system=None, ai=None):
         self.max_tokens = None
 
-        self.max_chat_tokens = 8000
-        self.token_warning = 4000
+        self.max_output_tokens = self.model.context // 4 # 25%
+        self.max_chat_tokens = self.model.context - self.max_output_tokens # 75%
+        self.token_warning = 16000 # Tell user if conversation exceeds this
         self.total_tokens = 0
         self.cost = 0
 
         self.summarize = True
         self.summarized = False
-        self.summarize_len = 4000
+        self.summarize_len = self.max_chat_tokens // 2
 
         # Translate requests and responses
         self.translate = False
@@ -614,8 +646,6 @@ class Conversation:
             messages = self.messages
         if self.model.llm == 'gemini':
             return num_tokens_gemini(messages, self.model.id)
-        elif self.model.llm == 'palm':
-            return num_tokens_palm(messages, self.model.id)
         elif self.model.llm == 'anthropic':
             return num_tokens_anthropic(messages, self.model.id)
         else:
@@ -710,6 +740,7 @@ class Conversation:
 
         in_cost, out_cost = self.model.costs
         cost = self.__num_tokens()*in_cost + self.__num_tokens(answer_list)*out_cost # prompt cost + response cost
+        cost *= 0.000001 # Costs are per million tokens
         self.cost = round(self.cost+cost, 5) # smallest unit is $0.01 / 1000
 
         return answer, cost
@@ -722,10 +753,9 @@ class Conversation:
 
         total_tokens = self.__num_tokens()
         # Summarize or forget if approaching token limit
-        summary_cost = 0
         if self.summarize and total_tokens > self.max_chat_tokens:
             with console.status('Consolidating memory...'):
-                _, summary_cost = self.summarize_messages(self.summarize_len, delete=True)
+                self.summarize_messages(self.summarize_len, delete=True)
 
         else: # If self.summarize = False, just forget oldest messages
             while self.__num_tokens() > self.max_chat_tokens:
@@ -738,7 +768,7 @@ class Conversation:
         self.history.append(message)
 
         try:
-            answer, message_cost = self.__complete(print_result=True, prefix=self.ai_prefix(), use_tools=self.use_tools)
+            answer, _ = self.__complete(print_result=True, prefix=self.ai_prefix(), use_tools=self.use_tools)
         except ConnectionError as e:
             console.print(f'\n{e}\n')
             self.messages.pop()
@@ -760,9 +790,7 @@ class Conversation:
         self.total_tokens = self.__num_tokens()
         cost_string = f'[od.dim][od.cyan_dim]{self.total_tokens}[/] tokens'
         if MONEY:
-            fmt = lambda c: f'[od.green_dim]{c:.2f}[/]'
-            summary_string = '+' + fmt(summary_cost) if summary_cost else ''
-            cost_string += f' ({summary_string}+{fmt(message_cost)}={fmt(self.cost)})'
+            cost_string += f' ([od.green_dim]{self.cost:.2f}[/])'
 
         if self.total_tokens > self.token_warning:
             console.print(f'{cost_string} {time_string} - Consider restarting conversation\n', justify='center')
@@ -821,7 +849,7 @@ class Conversation:
                 if k == 'variables':
                     for x, y in v.items(): # for each variable
                         if x == 'model':
-                            self.model = MODELS[y]
+                            self.model = get_model(y)
                         elif x not in NOSAVE_VARS: # Don't restore these
                             setattr(self, x, y)
                 elif k == 'messages':

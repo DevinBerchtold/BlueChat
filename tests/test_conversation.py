@@ -3,9 +3,9 @@ import conftest
 from conversation import *
 
 @pytest.mark.parametrize('filename, ai_name, model_id, seed, test_dialogue', [
-    ('tests/test1', 'CodeBot', 'gpt-3.5-turbo', 42, ["Ok. Bye", "Goodbye! If you have any more questions in the future, feel free to ask. Have a great day!"]),
-    ('tests/test2', 'Red', 'gpt-4-turbo-preview', 42, ['Hi', 'Hello! How can I assist you today?']),
-    ('tests/test3', 'ChefBot', 'gpt-4', 42, []),
+    ('tests/test1', 'CodeBot', 'gpt-4o', 42, ["Bye", "Goodbye! If you have any more questions in the future, feel free to ask. Have a great day!"]),
+    ('tests/test2', 'Red', 'gpt-4o', 42, ['Hi', 'Hello! How can I assist you today?']),
+    ('tests/test3', 'ChefBot', 'gpt-4o', 42, []),
 ])
 def test_conversation(filename, ai_name, model_id, seed, test_dialogue):
     chat = Conversation(filename=filename, seed=seed)

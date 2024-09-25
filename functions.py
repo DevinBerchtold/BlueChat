@@ -223,3 +223,24 @@ def tools_openai():
         for n, f in TOOLS.items() if f.enabled
     ]
 
+def tools_anthropic():
+    return [
+        {
+            "name": n,
+            "description": f.description,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    p['name']: {"type": "string", "description": p['description']}
+                    for p in f.parameters
+                },
+                "required": [
+                    p['name']
+                    for p in f.parameters
+                    if p['required']
+                ]
+            }
+            if f.parameters else {}
+        }
+        for n, f in TOOLS.items() if f.enabled
+    ]

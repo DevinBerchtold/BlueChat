@@ -50,35 +50,41 @@ A conversational engine for experimenting with OpenAI GPT Chat API. Enables a ba
 
 Commands begin with `!`. Everything else will be interpreted as conversation.
 
-`<!print|!messages>`: Print the messages object.
+`<!help|!h>`: Print the help screen.
 
-`<!history|!h>`: Print full conversation history.
+`<!exit|!e>`: Exit the application.
 
-`<!save|!s> [filename]`: Save the messages file to JSON/YAML.
+`<!restart|!r>`: Restart the chat by clearing memory and creating a new save file.
 
-`<!load|!l> [filename]`: Load a messages file from JSON/YAML.
+`<!undo|!u>`: Undo and remove the last set of messages in the chat.
 
-`<!copy|!c> [all|code|n]`: Copy `n` latest messages to the clipboard. Only copy code blocks if `code` is specified.
+`<!save|!s> [filename]`: Save the chat to `filename`. Automatically adds file extension and names the file if `filename` is not specified.
 
-`<!paste|!p>`: Paste a multi-line input from the clipboard (bypass terminal limitations).
+`<!load|!l> [filename]`: Load the chat from `filename`. Loads the latest file if `filename` is a bot name or the exact file if it's a filename.
 
-`<!summary|!sum> [num_tokens]`: Summarize `num_tokens` or the conversation so far.
+`<!summary|!su> [tokens]`: Summarize the last `tokens` of the conversation. Summarizes the entire conversation if `tokens` is not specified.
 
-`<!translate|!t> [ai_lang] [user_lang]`: Turn Translate Mode on or off.
+`<!history|!hi>`: Print the conversation system messages and full chat history.
 
-`<!model|!m> [model]`: Changes LLM model if `model` specified. Otherwise, prints current model.
+`<!model|!m> [reset] [model]`: Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Valid values for `model` are 'gpt-3.5', 'gpt-4', 'gemini', 'claude', or 'llama'. If `reset` is 'redo', the last message is regenerated with the new model.
 
-`<!auto|!a>`: Toggle automatic switch mode on or off.
+`<!tools|!t> [tool]`: Toggle tool usage for `tool` if specified. Otherwise, toggle tool usage for all tools. Valid values for `tool` are 'python' and 'browse'.
 
-`<!undo|!u>`: Go back one step in the conversation.
+`<!translate|!tr> [user] [ai]`: Toggle translate mode if no parameters are specified. If specified, `ai` is the AI language and `user` is the users language.
 
-`<!debug|!d>`: Toggle debug mode on or off.
+`<!debug|!d>`: Toggle debug mode for all modules.
 
-`<!variable|!v> [variable]=[value]`: Set a variable value.
+`<!auto|!a> [text]`: Toggle auto-switch context mode. If `text` is specified, context is checked and `text` is sent as a message.
 
-`<!restart|!r>`: Delete all messages except system message and restart conversation.
+`<!variable|!v> [parm]`: Set or print variables for global or chat settings. If `parm` is specified in the format `variable=value`, set the variable. If not specified, print all variables.
 
-`<!exit|!x>`: Exit program.
+`<!copy|!c> [parm]`: Copy the last `parm` chat messages to the clipboard if `parm` is a number or 'all'. Copy code blocks from the last message if `parm` is 'code'. Copies 2 messages by default.
+
+`<!paste|!p> [text]`: Paste the clipboard content and send as a message. If `text` is specified, `text` is prepended to the message before sending.
+
+`<!image|!i> [text]`: Attach an image or image URL from the clipboard. If `text` is specified, `text` is included with the message.
+
+`<!theme|!th> [theme]`: Set the syntax highlighting theme to the pygments theme `theme`.
 
 ---
 

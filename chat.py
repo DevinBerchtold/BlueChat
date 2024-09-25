@@ -50,8 +50,10 @@ except Exception:
 SWITCH = True
 FIRST_MESSAGE = True
 MICROPHONE = True
+THEME = 'one-dark'
+BACKGROUND = '#0C0C0C'
 
-SAVE_VARS = ('USER_NAME', 'FILENAME', 'SWITCH', 'MICROPHONE')
+SAVE_VARS = ('USER_NAME', 'FILENAME', 'SWITCH', 'MICROPHONE', 'THEME', 'BACKGROUND')
 NOPRINT_VARS = ('ALL_COMMANDS',)
 config = files.load_file(CONFIG)
 BOTS = config['bots']
@@ -59,6 +61,8 @@ for k, v in config['variables'].items():
     # Import certain variables from bots file
     if k in SAVE_VARS:
         globals()[k] = v
+
+console.set_theme(THEME, BACKGROUND)
 
 ALL_BOTS = sorted([
     f.split('.')[0]
@@ -152,7 +156,7 @@ def switch_context(user_input):
     if assistant in BOTS: # exact match
         if DEBUG: console.log(f'Assistant {create_filename()} (high certainty, string is key)')
         return assistant
-    
+
     for bot in BOTS: # starts with bot, 'bot', or "bot"
         if assistant.startswith(bot) or assistant.startswith(f"'{bot}'") or assistant.startswith(f"\"{bot}\""):
             if DEBUG: console.log(f'Assistant {create_filename()} (moderate certainty, string startswith bot)')
@@ -162,7 +166,7 @@ def switch_context(user_input):
         if bot in assistant:
             if DEBUG: console.log(f'Assistant {create_filename()} (low certainty, bot in string)')
             return bot
-            
+        
     if assistant != 'idk': # unknown response
         if DEBUG: console.print(f'Context switch unknown response: {assistant}')
 
@@ -199,10 +203,10 @@ def watch_window_size():
 def restart_command(chat, *_):
     """Restart the chat by clearing memory and creating a new save file."""
     global DATE, FILENUM
-    console.print('Restarting conversation')
     chat.reset(f'{BOT_FOLDER}/{FILENAME}')
     _, DATE, FILENUM = filename_vars(latest_file_today(FILENAME))
     FILENUM += 1
+    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
 
 def undo_messages(messages):
     for i, m in enumerate(reversed(messages), 1):
@@ -267,22 +271,30 @@ def load_command(chat, filename, *_):
         console.print('Error: No filename specified')
 
 def model_command(chat, model, reset):
-    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Valid values for `model` are 'gpt-*3*.5', 'gpt-*4*', '*g*emini', or '*c*laude'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
-    if model in conversation.MODEL_SHORTCUTS:
-        model_id = conversation.MODEL_SHORTCUTS[model]
-        mod = conversation.MODELS[model_id]
-        # Old model is vision and new model has vision
-        if chat.model.vision == True and isinstance(mod.vision, str):
-            chat.model = conversation.MODELS[mod.vision]
-        else:
-            chat.model = mod
-            chat.use_tools = conversation.USE_TOOLS if mod.tools else False
+    """Set the LLM model to be used in the chat if `model` is specified, or prints the current model otherwise. Valid values for `model` are 'gpt-*3*.5', 'gpt-*4*', '*g*emini', '*c*laude', or '*l*lama'. If `reset` is '*r*edo', the last message is regenerated with the new model."""
+    if model:
+        mod_obj = conversation.get_model(model)
+        if mod_obj:
+            chat.model = mod_obj
+            chat.use_tools = conversation.USE_TOOLS if mod_obj.tools else False
 
-    if reset in ('redo', 'r'):
-        _, user_message = undo_messages(chat.messages)
-        _, _ = undo_messages(chat.history)
-        console.print(f'Redoing with {chat.model.label}...')
-        return user_message
+        if reset in ('redo', 'r'):
+            _, user_message = undo_messages(chat.messages)
+            _, _ = undo_messages(chat.history)
+            console.print(f'Redoing with {chat.model.label}...')
+            return user_message
+    else: # No model specified, print out a list of possible choices
+        ids = []
+        for model in conversation.MODEL_LIST:
+            lab = f'[od.yellow]{model.label}:[/]'
+            for s in model.shortcuts:
+                if s in model.id:
+                    result = re.sub(re.escape(s), f"[od.cyan]{s}[/]", model.id, 1)
+                    ids.append((lab, result))
+                    break
+            else:
+                ids.append((lab, model.id))
+        console.print('\n'.join(f'{l} {i}' for l, i in ids), highlight=False)
     console.print(f"Model={chat.model}")
 
 def tools_command(chat, tool, *_):
@@ -338,8 +350,18 @@ def auto_command(_, *text):
             FIRST_MESSAGE = True
         console.print(f'Auto-switch={SWITCH}')
 
+def get_globals(*modules):
+    return {
+        attr: getattr(module, attr)
+        for module in modules
+        for attr in dir(module)
+        if not callable(getattr(module, attr)) and not attr.startswith("__")
+    }
+
 def variable_command(chat, parm, *_):
     """Set or print variables for global or chat settings. If `parm` is specified in the format `variable=value`, set the variable. If not specified, print all variables."""
+    all_globals = get_globals(functions, conversation, console, files, microphone, sys.modules[__name__])
+
     if parm:
         if '=' in parm:
             var, string = parm.split('=')
@@ -359,14 +381,14 @@ def variable_command(chat, parm, *_):
         else:
             var = parm
 
-        if var.isupper() and var in globals():
-            console.print(f'global {var}=', globals()[var])
+        if var.isupper() and var in all_globals:
+            console.print(f'global {var}=', all_globals[var])
         elif var.islower() and hasattr(chat, var):
             console.print(f'chat.{var}=', getattr(chat,var))
         else:
             console.print('Unrecognized variable')
     else:
-        console.print({k: v for k, v in globals().items() if k.isupper() and k not in NOPRINT_VARS})
+        console.print({k: v for k, v in all_globals.items() if k.isupper() and k not in NOPRINT_VARS})
         chat.print_vars()
 
 def copy_command(chat, parm, *_):
@@ -401,7 +423,7 @@ def copy_command(chat, parm, *_):
 def paste_command(_, *text):
     """Paste the clipboard content and send as a message. If `text` is specified, `text` is prepended to the message before sending."""
     user_input = pyperclip.paste()
-    console.print(user_input+'\n')
+    console.print(user_input)
     text = [w for w in text if w is not None]
     if text: # Prepend everything after !p
         user_input = ' '.join(text) + '\n\n' + user_input
@@ -412,8 +434,12 @@ def image_name():
     random_id = ''.join(random.choices(alpha, k=4))
     return create_filename()+f'_{random_id}.png'
 
-def image_command(_, *text):
+def image_command(chat: conversation.Conversation, *text):
     """Attach an image or image URL from the clipboard. If `text` is specified, `text` is included with the message."""
+    if not chat.model.vision:
+        console.print(f'Vision not supported by {chat.model.label}')
+        return False
+
     img = ImageGrab.grabclipboard()
     if isinstance(img, Image.Image): # Image on clipboard
         file = image_name()
@@ -423,11 +449,7 @@ def image_command(_, *text):
     else: # Text on clipboard
         img_string = f'image: {pyperclip.paste()}'
 
-    print(f'Clipboard {img_string}\n')
-
-    # Use vision model
-    if isinstance(chat.model.vision, str):
-        chat.model = conversation.MODELS[chat.model.vision]
+    console.print(f'Clipboard {img_string}\n')
     chat.use_tools = False
 
     user_input = img_string
@@ -435,6 +457,31 @@ def image_command(_, *text):
     if text:
         user_input += '\n\n' + ' '.join(text)
     return user_input
+
+def theme_command(chat, theme, background, *_):
+    """Set the syntax highlighting theme to the pygments theme `theme`."""
+    global THEME, BACKGROUND, last_input_reset
+    l = len(console.STYLES)
+    if theme == '+':
+        for i, s in enumerate(console.STYLES):
+            if s == console.code_theme:
+                THEME = console.STYLES[(i+1)%l]
+    elif theme == '-':
+        for i, s in enumerate(console.STYLES):
+            if s == console.code_theme:
+                THEME = console.STYLES[(i-1)%l]
+    elif theme in console.STYLES:
+        THEME = theme
+    else:
+        return
+
+    if background:
+        BACKGROUND = background
+
+    console.set_theme(THEME, BACKGROUND)
+    screen_reset(chat)
+    last_input_reset = True
+    console.print(THEME)
 
 def exit_command(*_):
     """Exit the application."""
@@ -449,7 +496,7 @@ def exitc_command(*_):
 
 COMMAND_LIST = (
     'help', 'exit', 'restart', 'undo', 'save', 'load', 'summary', 'history', 'model',
-    'tools', 'translate', 'debug', 'auto', 'variable', 'copy', 'paste', 'image'
+    'tools', 'translate', 'debug', 'auto', 'variable', 'copy', 'paste', 'image', 'theme'
 )
 ALL_COMMANDS = {}
 
@@ -514,7 +561,7 @@ for cmds in COMMANDS+SECRET_COMMANDS:
 ##     ## ##     ## #### ##    ##
 
 if __name__ == '__main__':
-    console.print_rule('[bold]BlueChat')
+    console.print_rule('[bold]BlueChat', style=None)
     # console.print('[bold]Chatbots:[/] '+', '.join([s.capitalize() for s in ALL_BOTS]) )
 
     if len(sys.argv) == 2: # If there's an argument...
@@ -567,11 +614,15 @@ if __name__ == '__main__':
                         ret = commands[command](chat, *args)
                         if ret:
                             user_input = ret
+                        if command not in ('history', 'restart'):
+                            console.print_rule()
                     elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)
                         FIRST_MESSAGE = False # Just loaded, don't switch context right away
                         load_latest(command, reset=True)
                 else:
                     console.print('Unknown command')
+            else:
+                console.print_rule()
             # Some commands change user_input. Check again if we need to do dialogue
             if user_input and not user_input.startswith('!'):
                 if SWITCH and FIRST_MESSAGE:
@@ -585,7 +636,7 @@ if __name__ == '__main__':
                 success = chat.get_dialogue(user_input)
 
                 if success and AUTOSAVE:
-                    if DEBUG: console.print(chat.messages)
+                    if DEBUG: console.log(f'{len(chat.messages)}/{len(chat.history)} messages/history')
                     chat.save(create_filename())
     except Exception as e:
         console.print_exception(e, show_locals=True)

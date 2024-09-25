@@ -6,7 +6,7 @@ import base64
 import json
 from math import ceil
 import random
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from string import ascii_letters, digits
 
 import openai
@@ -14,6 +14,7 @@ import tiktoken
 import google.generativeai as genai
 import google.ai.generativelanguage as glm
 import anthropic
+import ollama
 from PIL import Image
 
 import files
@@ -46,6 +47,9 @@ class Model:
     tools: bool = False
     vision: bool = False
 
+    def __repr__(self):
+        return f"Model(id='{self.id}')"
+
     def __post_init__(self):
         for s in (*self.shortcuts, self.id):
             if s not in MODEL_SHORTCUTS: MODEL_SHORTCUTS[s] = self.id
@@ -57,7 +61,7 @@ MODEL_LIST = [ # cost: dollars per million tokens
     Model(id='gpt-4', label='GPT-4', costs=(30.0, 60.0),
         context=8192, llm='openai', tools=True),
     Model(id='gpt-4o', label='GPT-4o', costs=(5.0, 15.0),
-        context=128000, llm='openai', shortcuts=('gpt', '4', '4o'), tools=True, vision=True),
+        context=128000, llm='openai', shortcuts=('4', '4o', 'gpt'), tools=True, vision=True),
     Model(id='gpt-4o-mini', label='GPT-4o Mini', costs=(0.15, 0.6),
         context=128000, llm='openai', shortcuts=('m', 'mini'), tools=True, vision=True),
     # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
@@ -68,9 +72,23 @@ MODEL_LIST = [ # cost: dollars per million tokens
         context=1048576, llm='gemini', shortcuts=('f', 'flash'), tools=False, vision=True),
     # https://www.anthropic.com/pricing#anthropic-api
     Model(id='claude-3-opus-20240229', label='Claude 3', costs=(15.0, 75.0),
-        context=200000, llm='anthropic', shortcuts=('o', 'opus'), tools=True),
+        context=200000, llm='anthropic', shortcuts=('opus',), tools=True),
     Model(id='claude-3-5-sonnet-20240620', label='Claude 3.5', costs=(3.0, 15.0),
         context=200000, llm='anthropic', shortcuts=('c', 'claude', 's', 'sonnet'), tools=True, vision=True),
+    # https://ollama.com/library
+    # Costs estimated as 0.01*parameter_size_in_billions
+    Model(id='llama3', label='Llama 3 8B', costs=(0.08, 0.16),
+        context=128000, llm='ollama'),
+    Model(id='llama3.1', label='Llama 3.1 8B', costs=(0.08, 0.16),
+        context=128000, llm='ollama', shortcuts=('o', 'l', 'llama', 'ollama'), tools=True),
+    Model(id='gemma2', label='Gemma 2 9B', costs=(0.09, 0.18),
+        context=128000, llm='ollama', shortcuts=('g2', '9b', 'gemma')),
+    Model(id='gemma2:2b', label='Gemma 2 2B', costs=(0.02, 0.04),
+        context=128000, llm='ollama', shortcuts=('g22', '2b')),
+    Model(id='phi3:3.8b', label='Phi 3 3.8B', costs=(0.038, 0.076),
+        context=128000, llm='ollama', shortcuts=('phi3',)),
+    Model(id='phi3.5:3.8b', label='Phi 3.5 3.8B', costs=(0.038, 0.076),
+        context=128000, llm='ollama', shortcuts=('p', 'p35', 'phi3.5')),
 ]
 MODELS = {m.id: m for m in MODEL_LIST}
 
@@ -79,14 +97,21 @@ def get_model(id):
         return MODELS[id]
     if id in MODEL_SHORTCUTS:
         return MODELS[MODEL_SHORTCUTS[id]]
+    
+    # Unknown model, guess llm and try to use it
     if id.startswith('gpt'):
-        return Model(id=id, label=id, costs=(5.0, 15.0), context=128000, llm='openai'),
-    if id.startswith('models/gemini'):
-        return Model(id=id, label=id, costs=(5.0, 15.0), context=1048576, llm='gemini'),
-    if id.startswith('claude'):
-        return Model(id=id, label=id, costs=(3.0, 15.0), context=200000, llm='anthropic'),
+        MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=128_000, llm='openai')
+    elif id.startswith('models/gemini'):
+        MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=1_048_576, llm='gemini')
+    elif id.startswith('gemini'):
+        id = 'models/' + id
+        MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=1_048_576, llm='gemini')
+    elif id.startswith('claude'):
+        MODELS[id] = Model(id=id, label=id.title(), costs=(3.0, 15.0), context=200_000, llm='anthropic')
     else:
         return False
+    
+    return MODELS[id]
 
 MODEL = 'gpt-4o'
 USE_TOOLS = True
@@ -103,11 +128,13 @@ except Exception:
     USER_ID = 'unknown'
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
+if DEBUG: console.print(openai.models.list())
 
 if "GOOGLE_API_KEY" in os.environ:
     genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 else:
     genai.configure(api_key=os.environ["PALM_API_KEY"])
+if DEBUG: console.print(*genai.list_models())
 
 anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -157,7 +184,6 @@ class Message:
 
 def num_tokens_gemini(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages."""
-    # return sum(len(m.content) // 4 for m in messages)
     if messages:
         llm_model = genai.GenerativeModel(model, system_instruction=messages[0].content)
     else:
@@ -183,7 +209,10 @@ image_pattern = re.compile(r'^image: (\S+) ?\(?(\d*)?x?(\d*)?\)?\s*(.*)')
 
 def num_tokens_openai(messages, model=MODEL):
     """Returns the number of tokens used by a list of messages. Copied from OpenAI example"""
-    encoding = tiktoken.encoding_for_model(model)
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.encoding_for_model('gpt-4')
     num_tokens = 0
     for message in messages:
         if match := image_pattern.match(message.content):
@@ -196,10 +225,6 @@ def num_tokens_openai(messages, model=MODEL):
                     num_tokens += -1  # role is always required and always 1 token
     num_tokens += 2  # every reply is primed with <im_start>assistant
     return num_tokens
-
-def num_tokens_anthropic(messages, model=MODEL):
-    """Returns the number of tokens used by a list of messages."""
-    return sum(len(m.content) // 4 for m in messages)
 
 def call_functions(messages, calls):
     for c in calls:
@@ -227,14 +252,14 @@ def call_functions(messages, calls):
                 console.print('Press enter to confirm...')
                 console.input()
             else:
-                console.print('')
+                console.print_rule()
             
             response = functions.TOOLS[name].function(**args)
             
             messages.append(Message(
                 'tool', response, tool_call_id=id, name=name
             ))
-            console.print('')
+            console.print_rule()
 
 def gemini_messages(messages):
     new_roles = {
@@ -363,6 +388,26 @@ def anthropic_messages(messages):
                 formatted_messages.append(d)
     return formatted_messages
 
+def ollama_messages(messages):
+    formatted_messages = []
+    for m in messages:
+        if m.tool_calls:
+            formatted_messages.append({
+                'role': m.role,
+                'tool_calls': [
+                    {
+                        'type': 'function',
+                        'function': { 'name': t.name, 'arguments': t.arguments }
+                    }
+                    for t in m.tool_calls
+                ]
+            })
+        else:
+            d = {k: v for k, v in asdict(m).items() if v}
+            if m.role == 'tool' and m.content == '': d['content'] = ''
+            formatted_messages.append(d)
+    return formatted_messages
+
 def stream_gemini(llm_model, response, messages, **kwargs):
     """Stream chunks from content messages while detecting and executing function calls."""
     while True:
@@ -395,9 +440,7 @@ def stream_gemini(llm_model, response, messages, **kwargs):
 
 def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, use_tools):
     llm_messages = gemini_messages(messages)
-    if DEBUG: console.print(llm_messages)
-    if model == 'models/gemini-pro-vision':
-        llm_messages = [llm_messages[-1]] # Multiturn not yet supported by gemini-vision
+    if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
 
     if use_tools: llm_model = genai.GenerativeModel(model,tools=functions.tools_gemini())
     else: llm_model = genai.GenerativeModel(model)
@@ -437,7 +480,7 @@ def stream_openai(response, messages, **kwargs):
                         if tc.function.name: func_calls[n].name = tc.function.name
                         if tc.function.arguments: func_calls[n].arguments += tc.function.arguments
             else:
-                yield delta.content if delta.content else ''
+                yield delta.content or ''
 
         if func_calls: # Call the functions and run model again
             for f in func_calls:
@@ -450,7 +493,7 @@ def stream_openai(response, messages, **kwargs):
 
 def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = openai_messages(messages)
-    if DEBUG: console.print(llm_messages)
+    if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
     kwargs = {
         'model': model,
         'messages': llm_messages,
@@ -477,11 +520,11 @@ def stream_anthropic(response, messages, **kwargs):
     """Stream chunks from content messages while detecting and executing function calls."""
     for chunk in response:
         if chunk.type == 'content_block_delta':
-            yield chunk.delta.text if chunk.delta.text else ''
+            yield chunk.delta.text or ''
 
 def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = anthropic_messages(messages)
-    if DEBUG: console.print(llm_messages)
+    if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
 
     if use_tools: # Anthropic stream+tools not currently supported
         stream = False
@@ -529,6 +572,68 @@ def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print
         else:
             return response.content[0].text, False
 
+def stream_ollama(response, messages, **kwargs):
+    """Stream chunks from content messages while detecting and executing function calls."""
+    while True:
+        func_calls = []
+        for chunk in response:
+            delta = chunk['message']
+            if 'tool_calls' in delta:
+                for n, tc in enumerate(delta['tool_calls']):
+                    while len(func_calls) <= n: # Extend if necessary
+                        func_calls.append(Call(arguments=''))
+                    if tc.id: func_calls[n].id = tc.id
+                    if tc.function:
+                        if tc.function.name: func_calls[n].name = tc.function.name
+                        if tc.function.arguments: func_calls[n].arguments += tc.function.arguments
+            else:
+                yield delta.get('content', '')
+
+        if func_calls: # Call the functions and run model again
+            for f in func_calls:
+                f.arguments = functions.get_args(f.name, f.arguments)
+            call_functions(messages, func_calls)
+            kwargs['messages'] = ollama_messages(messages)
+            response = ollama.chat(**kwargs)
+        else:
+            break
+
+def chat_ollama(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
+    llm_messages = ollama_messages(messages)
+    if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
+
+    if use_tools: # Ollama stream+tools is not currently supported
+        stream = False
+
+    kwargs = {
+        'model': model,
+        'messages': llm_messages,
+        'stream': stream,
+    }
+    if max_tokens: kwargs['max_tokens'] = max_tokens
+    if use_tools: kwargs['tools'] = functions.tools_openai()
+    
+    with console.status('Connecting to Ollama...'):
+        response = ollama.chat(**kwargs) # New syntax
+
+    if stream:
+        del kwargs['messages']
+        return console.print_stream(stream_ollama(response, messages, **kwargs)), True
+    else:
+        if 'tool_calls' in response['message']:
+            mes = response['message']
+            ret = mes['content']
+            
+            calls = [ Call(name=c['function']['name'], id='1', arguments=c['function']['arguments']) for c in mes['tool_calls']]
+            call_functions(messages, calls)
+            kwargs['messages'] = ollama_messages(messages)
+            kwargs['messages'][-1] = {'role': 'tool', 'content': kwargs['messages'][-1]['content']}
+            response = ollama.chat(**kwargs)
+            ret += response['message']['content']
+            return ret, False
+        else:
+            return response['message']['content'], False
+
 def chat_complete(messages, model=get_model(MODEL), temperature=None, max_tokens=None, print_result=True, seed=None, use_tools=False):
     for n in range(API_TRIES): # 0, 1, 2, ..., n
         try:
@@ -537,8 +642,10 @@ def chat_complete(messages, model=get_model(MODEL), temperature=None, max_tokens
                 response, printed = chat_gemini(messages, model.id, temperature, max_tokens, stream, print_result, use_tools)
             elif model.llm == 'anthropic':
                 response, printed = chat_anthropic(messages, model.id, temperature, max_tokens, stream, False, print_result, use_tools)
-            else: # OpenAI
+            elif model.llm == 'openai': # OpenAI
                 response, printed = chat_openai(messages, model.id, temperature, max_tokens, stream, seed, print_result, use_tools)
+            else: # Ollama
+                response, printed = chat_ollama(messages, model.id, temperature, max_tokens, stream, seed, print_result, use_tools)
             if not printed:
                 console.print_markdown(response)
             return response
@@ -638,7 +745,6 @@ class Conversation:
             i = console.input(self.user_prefix())
         else:
             i = console.input()
-        console.print('')
         return i
 
     def __num_tokens(self, messages=None):
@@ -646,10 +752,10 @@ class Conversation:
             messages = self.messages
         if self.model.llm == 'gemini':
             return num_tokens_gemini(messages, self.model.id)
-        elif self.model.llm == 'anthropic':
-            return num_tokens_anthropic(messages, self.model.id)
-        else:
+        elif self.model.llm == 'openai':
             return num_tokens_openai(messages, self.model.id)
+        else:
+            return sum(len(m.content) // 4 for m in messages)
 
     def user_prefix(self, n=None):
         if n is None:
@@ -720,7 +826,7 @@ class Conversation:
                 console.print_markdown(m.content)
                 n += 1
             
-            console.print('') # blank line
+            console.print_rule()
 
     def __complete(self, messages=None, system=None, user=None, print_result=False, prefix='', use_tools=False):
         if not messages:
@@ -788,14 +894,21 @@ class Conversation:
         else: time_string = f'[od.cyan_dim]{sec:.2f}s[/]'
 
         self.total_tokens = self.__num_tokens()
-        cost_string = f'[od.dim][od.cyan_dim]{self.total_tokens}[/] tokens'
+        if self.total_tokens < 1_000:
+            num = f'{self.total_tokens}'
+        elif self.total_tokens < 1_000_000:
+            num = f'{self.total_tokens/1_000:.1f}k'
+        else:
+            num = f'{self.total_tokens/1_000_000:.1f}m'
+        cost_string = f'[od.dim][od.cyan_dim]{num}[/] tokens'
+
         if MONEY:
             cost_string += f' ([od.green_dim]{self.cost:.2f}[/])'
 
         if self.total_tokens > self.token_warning:
-            console.print(f'{cost_string} {time_string} - Consider restarting conversation\n', justify='center')
+            console.print_rule(f'{cost_string} {time_string} - Consider restarting conversation\n')
         elif MONEY:
-            console.print(f'{cost_string} {time_string}\n', justify='center')
+            console.print_rule(f'{cost_string} {time_string}')
 
         return True
 

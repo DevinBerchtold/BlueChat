@@ -13,7 +13,7 @@ if RICH:
     from rich.align import Align
     from rich.rule import Rule
     from rich.columns import Columns
-    from pygments.styles.onedark import OneDarkStyle
+    from pygments.styles import get_all_styles, get_style_by_name
 
 
 
@@ -33,11 +33,34 @@ REFRESH = 8
 paragraphs = None
 resets = 0
 
+def rgb(hex_string):
+    return [int(hex_string[i:i+2], 16) for i in (1, 3, 5)]
+
+def bright(hex_string):
+    return sum(rgb(hex_string)) > 384
+
+STYLES = list(get_all_styles())
+code_theme = 'one-dark'
+code_style = None
+terminal_background = '#0C0C0C' # ps:#0C0C0C od:#181818 lb:#101420
+
+def set_theme(theme, background=None):
+    global code_theme, code_style, terminal_background
+    BaseStyle = get_style_by_name(theme)
+
+    code_theme = theme
+    if background:
+        terminal_background = background
+    
+    if bright(terminal_background) == bright(BaseStyle.background_color): # Both dark or both light
+        class InlineStyle(BaseStyle):
+            background_color = terminal_background # Override background color
+        code_style = InlineStyle
+    else: # Different brightness, keep style background for legibility
+        code_style = BaseStyle
+
 if RICH:
-    class InlineStyle(OneDarkStyle):
-        # background_color = '#0C0C0C'
-        background_color = '#181818'
-    code_block_style = 'one-dark'
+    set_theme(code_theme)
 
     # one dark colors
     od_white = '#ABB2BF'
@@ -123,7 +146,7 @@ def print(*args, **kwargs):
 
 def log(s, **kwargs):
     if RICH:
-        return rich_console.log(s, **kwargs)
+        return rich_console.log(s, _stack_offset=2, **kwargs)
     else:
         return std_print(s, **kwargs)
 
@@ -213,11 +236,10 @@ def generate_paragraphs(chunks):
                 yield buffer
                 buffer = chunk[2:]
                 if list_match: # first element of a list (list_match = True, list_block = False)
-                    # console.print('[od.dim]_ _ _[/]', justify='center')
-                    pass
+                    if DEBUG: rich_console.print('[od.dim]_ _ _[/]', justify='center')
                 else: # (list_match = False, list_block = ?)
-                    # console.print('[od.dim]- - -[/]', justify='center')
-                    rich_console.print('')
+                    if DEBUG: rich_console.print('[od.dim]- - -[/]', justify='center')
+                    else: rich_console.print('')
                 live = Live(console=rich_console, refresh_per_second=REFRESH)
                 live.start()
             list_block = list_match
@@ -232,7 +254,7 @@ def generate_paragraphs(chunks):
         yield buffer
 
 def markdown(string):
-    markdown = Markdown(string, code_theme=code_block_style, inline_code_lexer='python', inline_code_theme=InlineStyle)
+    markdown = Markdown(string, code_theme=code_theme, inline_code_lexer='python', inline_code_theme=code_style)
     return Padding(markdown, (0, 1))
 
 def print_markdown(string):
@@ -241,9 +263,9 @@ def print_markdown(string):
     else:
         std_print(string)
 
-def print_rule(string):
+def print_rule(string=None, style='bright_black'):
     if RICH:
-        rich_console.print(Padding(Rule(string), (0, 1)))
+        rich_console.print(Padding(Rule(string, style=style), (0, 1)))
     else:
         std_print(f'==== {string} ====')
 
@@ -281,7 +303,7 @@ def print_output(c):
 def print_exception(e, **kwargs):
     if RICH:
         rich_console.print_exception(
-            theme = code_block_style,
+            theme = code_theme,
             width = os.get_terminal_size().columns,
             **kwargs
         )

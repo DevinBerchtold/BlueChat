@@ -12,6 +12,9 @@ from selenium import webdriver
 from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+import wikipediaapi
+
+wikipedia = wikipediaapi.Wikipedia('BlueChat (github.com/DevinBerchtold)', 'en')
 
 import google.ai.generativelanguage as glm
 
@@ -112,6 +115,12 @@ def clipboard(*args):
     console.print_output(user_input)
     return user_input
 
+def wiki(search):
+    w = wikipedia.page(search)
+    text = f'{w.title}\n\n{w.text}'
+    console.print(text)
+    return text
+
 def get_args(name, string):
     args = {}
     try:
@@ -135,14 +144,18 @@ def get_args(name, string):
 class Tool:
     name: str
     description: str
+    icon: str
     function: Callable[..., str]
     parameters: tuple = ()
     confirm: bool = False
     enabled: bool = True
 
+    def __repr__(self):
+        return f"Tool(name='{self.name}')"
+
 TOOL_LIST = [
     Tool(
-        name='python', function=execute, confirm=True, enabled=True,
+        name='python', function=execute, confirm=True, enabled=True, icon='🐍',
         description="Runs the Python source code with exec() and returns the standard output that was printed with print(). Code can and use packages as necessary",
         parameters=[{
             'name': 'python_code',
@@ -152,7 +165,7 @@ TOOL_LIST = [
         }]
     ),
     Tool(
-        name='browse', function=browse, confirm=False, enabled=True,
+        name='browse', function=browse, confirm=False, enabled=True, icon='🔗',
         description="Browses to the given url and extracts the text from the website using BeautifulSoup",
         parameters=[{
             'name': 'url',
@@ -162,7 +175,17 @@ TOOL_LIST = [
         }]
     ),
     Tool(
-        name='clipboard', function=clipboard, confirm=True, enabled=False,
+        name='wikipedia', function=wiki, confirm=False, enabled=True, icon='🌐',
+        description="Searches Wikipedia and returns the full text of most relevant page.",
+        parameters=[{
+            'name': 'search',
+            'description': "A string to search on Wikipedia. The most relevant page will be returned.",
+            'type': str,
+            'required': True
+        }]
+    ),
+    Tool(
+        name='clipboard', function=clipboard, confirm=True, enabled=False, icon='📋',
         description="Lets the user copy something to the clipboard and sends it back to you",
     ),
 ]

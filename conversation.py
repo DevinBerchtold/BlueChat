@@ -63,24 +63,37 @@ MODEL_LIST = [ # cost: dollars per million tokens
     Model(id='gpt-4o', label='GPT-4o', costs=(5.0, 15.0),
         context=128000, llm='openai', shortcuts=('4', '4o', 'gpt'), tools=True, vision=True),
     Model(id='gpt-4o-mini', label='GPT-4o Mini', costs=(0.15, 0.6),
+        context=128000, llm='openai', shortcuts=('4o-m',), tools=True, vision=True),
+    # https://platform.openai.com/docs/guides/reasoning/quickstart
+    Model(id='o1', label='o1', costs=(15.0, 60.0),
+        context=128000, llm='openai', shortcuts=('o1',), tools=True, vision=True),
+    Model(id='o1-mini', label='o1 Mini', costs=(1.1, 4.4),
         context=128000, llm='openai', shortcuts=('m', 'mini'), tools=True, vision=True),
+    Model(id='o3-mini', label='o3 Mini', costs=(1.1, 4.4),
+        context=128000, llm='openai', shortcuts=('o3',), tools=True, vision=True),
     # https://cloud.google.com/vertex-ai/docs/generative-ai/pricing
     # https://ai.google.dev/pricing
     Model(id='models/gemini-1.5-pro', label='Gemini 1.5', costs=(5.0, 15.0),
-        context=1048576, llm='gemini', shortcuts=('g', 'gemini', 'pro', '15'), tools=True, vision=True),
+        context=1048576, llm='gemini', shortcuts=('pro', '1.5'), tools=True, vision=True),
     Model(id='models/gemini-1.5-flash', label='Gemini 1.5 Flash', costs=(0.075, 0.3),
-        context=1048576, llm='gemini', shortcuts=('f', 'flash'), tools=False, vision=True),
+        context=1048576, llm='gemini', shortcuts=('1.5-flash'), tools=False, vision=True),
+    Model(id='models/gemini-2.0-flash-exp', label='Gemini 2.0 Flash', costs=(0.075, 0.3),
+        context=1048576, llm='gemini', shortcuts=('g', 'gemini', 'f', 'flash'), tools=False, vision=False),
     # https://www.anthropic.com/pricing#anthropic-api
-    Model(id='claude-3-opus-20240229', label='Claude 3', costs=(15.0, 75.0),
+    Model(id='claude-3-opus-latest', label='Claude 3', costs=(15.0, 75.0),
         context=200000, llm='anthropic', shortcuts=('opus',), tools=True),
-    Model(id='claude-3-5-sonnet-20240620', label='Claude 3.5', costs=(3.0, 15.0),
+    Model(id='claude-3-5-sonnet-latest', label='Claude 3.5', costs=(3.0, 15.0),
         context=200000, llm='anthropic', shortcuts=('c', 'claude', 's', 'sonnet'), tools=True, vision=True),
+    Model(id='claude-3-5-haiku-latest', label='Claude 3.5 Haiku', costs=(0.8, 4.0),
+        context=200000, llm='anthropic', shortcuts=('h', 'haiku')),
     # https://ollama.com/library
     # Costs estimated as 0.01*parameter_size_in_billions
     Model(id='llama3', label='Llama 3 8B', costs=(0.08, 0.16),
         context=128000, llm='ollama'),
     Model(id='llama3.1', label='Llama 3.1 8B', costs=(0.08, 0.16),
-        context=128000, llm='ollama', shortcuts=('o', 'l', 'llama', 'ollama'), tools=True),
+        context=128000, llm='ollama', shortcuts=('l', 'llama'), tools=True),
+    Model(id='llama3.2', label='Llama 3.2 3B', costs=(0.03, 0.06),
+        context=128000, llm='ollama', shortcuts=('l32',), tools=True),
     Model(id='gemma2', label='Gemma 2 9B', costs=(0.09, 0.18),
         context=128000, llm='ollama', shortcuts=('g2', '9b', 'gemma')),
     Model(id='gemma2:2b', label='Gemma 2 2B', costs=(0.02, 0.04),
@@ -99,7 +112,7 @@ def get_model(id):
         return MODELS[MODEL_SHORTCUTS[id]]
     
     # Unknown model, guess llm and try to use it
-    if id.startswith('gpt'):
+    if id.startswith('gpt') or id.startswith('o1') or id.startswith('o3'):
         MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=128_000, llm='openai')
     elif id.startswith('models/gemini'):
         MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=1_048_576, llm='gemini')
@@ -108,12 +121,12 @@ def get_model(id):
         MODELS[id] = Model(id=id, label=id.title(), costs=(5.0, 15.0), context=1_048_576, llm='gemini')
     elif id.startswith('claude'):
         MODELS[id] = Model(id=id, label=id.title(), costs=(3.0, 15.0), context=200_000, llm='anthropic')
-    else:
-        return False
+    else: # Nothing else? Maybe Ollama...
+        MODELS[id] = Model(id=id, label=id.title(), costs=(3.0, 15.0), context=128_000, llm='ollama')
     
     return MODELS[id]
 
-MODEL = 'gpt-4o'
+MODEL = 'claude-3-5-sonnet-latest'
 USE_TOOLS = True
 CONFIRM = True
 STREAM = True
@@ -442,7 +455,8 @@ def chat_gemini(messages, model, temperature, max_tokens, stream, print_result, 
     llm_messages = gemini_messages(messages)
     if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
 
-    if use_tools: llm_model = genai.GenerativeModel(model,tools=functions.tools_gemini())
+    tools = functions.tools_gemini()
+    if tools and use_tools: llm_model = genai.GenerativeModel(model, tools=tools)
     else: llm_model = genai.GenerativeModel(model)
 
     config = genai.types.GenerationConfig()
@@ -493,6 +507,12 @@ def stream_openai(response, messages, **kwargs):
 
 def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_result, use_tools):
     llm_messages = openai_messages(messages)
+    if model.startswith('o1') or model.startswith('o3'):
+        if llm_messages and len(llm_messages) > 0 and llm_messages[0].get('role') == 'system':
+            llm_messages = llm_messages[1:]
+        temperature = 1
+        use_tools = False
+    
     if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
     kwargs = {
         'model': model,
@@ -503,7 +523,8 @@ def chat_openai(messages, model, temperature, max_tokens, stream, seed, print_re
         'seed': seed
     }
     if max_tokens: kwargs['max_tokens'] = max_tokens
-    if use_tools: kwargs['tools'] = functions.tools_openai()
+    tools = functions.tools_openai()
+    if tools and use_tools: kwargs['tools'] = tools
     if print_result:
         with console.status('Connecting to OpenAI...'):
             response = openai.chat.completions.create(**kwargs) # New syntax
@@ -526,7 +547,8 @@ def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print
     llm_messages = anthropic_messages(messages)
     if DEBUG: console.log(f'chat {model}, {len(llm_messages)} messages')
 
-    if use_tools: # Anthropic stream+tools not currently supported
+    tools = functions.tools_anthropic()
+    if tools and use_tools: # Anthropic stream+tools not currently supported
         stream = False
 
     kwargs = {
@@ -542,7 +564,7 @@ def chat_anthropic(messages, model, temperature, max_tokens, stream, seed, print
     
     if temperature: kwargs['temperature'] = temperature
 
-    if use_tools: kwargs['tools'] = functions.tools_anthropic()
+    if tools and use_tools: kwargs['tools'] = tools
     
     if print_result:
         with console.status('Connecting to Anthropic...'):
@@ -610,11 +632,21 @@ def chat_ollama(messages, model, temperature, max_tokens, stream, seed, print_re
         'messages': llm_messages,
         'stream': stream,
     }
-    if max_tokens: kwargs['max_tokens'] = max_tokens
-    if use_tools: kwargs['tools'] = functions.tools_openai()
+    tools = functions.tools_openai()
+    if tools and use_tools: kwargs['tools'] = tools
     
-    with console.status('Connecting to Ollama...'):
-        response = ollama.chat(**kwargs) # New syntax
+    # if max_tokens: kwargs['max_tokens'] = max_tokens
+    options = {}
+    if max_tokens:
+        options['num_predict'] = max_tokens
+    if options:
+        kwargs['options'] = options
+
+    if print_result:
+        with console.status('Connecting to Ollama...'):
+            response = ollama.chat(**kwargs)
+    else:
+        response = ollama.chat(**kwargs)
 
     if stream:
         del kwargs['messages']
@@ -661,13 +693,13 @@ def chat_complete(messages, model=get_model(MODEL), temperature=None, max_tokens
 
     raise ConnectionError(f"Failed to access LLM API after {API_TRIES} attempts.")
 
-def get_complete(system, user_request, max_tokens=None, print_result=True, model=get_model(MODEL)):
+def get_complete(system, user_request, max_tokens=None, print_result=True, model=get_model(MODEL), temperature=None):
     complete_messages = [
         Message('system', system),
         Message('user', user_request)
     ]
     answer = ''
-    for p in chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result, model=model):
+    for p in chat_complete(complete_messages, max_tokens=max_tokens, print_result=print_result, model=model, temperature=temperature):
         answer += p
     return answer
 
@@ -696,8 +728,7 @@ def get_summary(request):
 
 class Conversation:
     def __init__(self, system=None, filename=None, user='Blue', ai='Red', model=MODEL, seed=None, use_tools=USE_TOOLS, confirm=True):
-        self.model = get_model(model)
-        self.use_tools = use_tools
+        self.set_model(model, use_tools)
         self.confirm = confirm
         self.user_name = user
         self.ai_name = ai
@@ -735,6 +766,19 @@ class Conversation:
         elif filename:
             if not self.load(filename):
                 console.print("Error: Couldn't load file on reset()")
+
+    def set_model(self, model=None, use_tools=None):
+        if model != None:
+            self.model = get_model(model)
+        
+        if use_tools != None:
+            self.use_tools = use_tools
+        
+        self.model_string = self.model.label
+        if self.use_tools:
+            for t in functions.TOOL_LIST:
+                if t.enabled:
+                    self.model_string += ' ' + t.icon
 
     def print_vars(self):
         variables = {k: v for k, v in vars(self).items() if k not in NOPRINT_VARS}
@@ -1011,9 +1055,9 @@ class Conversation:
         return filename
 
     def save(self, filename):
-        def to_dicts(messages):
+        def to_dicts(messages_array):
             ret = []
-            for m in messages:
+            for m in messages_array:
                 d = {k: v for k, v in asdict(m).items() if v}
                 ret.append(d)
             return ret
@@ -1022,10 +1066,19 @@ class Conversation:
         variables = {k: v for k, v in vars(self).items() if k not in NOSAVE_VARS}
         variables['model'] = self.model.id
         date = datetime.now()
-        data = {'date': date, 'variables': variables,
-            'messages': to_dicts(self.messages),
-            'history': to_dicts(self.history)
-        }
+        messages = to_dicts(self.messages)
+        history = to_dicts(self.history)
+
+        # Make equal elements the same
+        i = len(messages)
+        for h in reversed(history):
+            while i > 0:
+                i -= 1
+                if h == messages[i]:
+                    messages[i] = h
+                    break
+
+        data = {'date': date, 'variables': variables, 'messages': messages, 'history': history}
 
         files.save_file(data, filename)
 

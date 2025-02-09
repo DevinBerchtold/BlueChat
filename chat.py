@@ -36,8 +36,8 @@ FOLDER = BOT_FOLDER
 
 CONFIG_FILE = 'bots'
 CONFIG = f'{BOT_FOLDER}/{CONFIG_FILE}'
-AUTOSAVE = True
-AUTOLOAD = True
+AUTOSAVE = True # Save after every chat response
+AUTOLOAD = False # Load previous chat on startup
 FILENUM = 1
 DATE = files.TODAY
 
@@ -132,7 +132,8 @@ def load_latest(string, reset=False):
         chat.reset(file, ai=string.capitalize()+'Bot')
     else:
         chat.load(file)
-    console.print_filename(file)
+    
+    console.print_filename(file, model=chat.model_string)
 
     if len(chat.messages) > 1:
         PRINT_START = len(chat.history)-2
@@ -234,7 +235,7 @@ def summary_command(chat, tokens, *_):
 
 def history_command(chat, *_):
     """Print the conversation system messages and full chat history."""
-    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}')
+    console.print_filename(f'{CHAT_FOLDER}/{FILENAME}_{DATE}_{FILENUM}', model=chat.model_string)
     chat.print_messages()
 
 def save_command(chat, filename, *_):
@@ -523,7 +524,7 @@ SECRET_COMMANDS = command_pairs(('exitc',))
 def help_command(*_):
     """Print the help screen."""
     def cmd_text(c):
-        return f'[bold][od.cyan]!{c[1]}[/]{c[0][len(c[1]):]}[/]'
+        return f'[bold][od.cyan]/{c[1]}[/od.cyan][white]{c[0][len(c[1]):]}[/white][/bold]'
     help_strings = []
     for cmds in COMMANDS:
         func = globals()[f'{cmds[0]}_command']
@@ -538,7 +539,7 @@ def help_command(*_):
 
     bots = ' '.join(cmd_text(cmds) for cmds in BOT_COMMANDS)
     help_strings.append(f"{bots}: Load the corresponding bot and start a new conversation.")
-    help_strings.append("""Any text without an exclamation point '!' (indicating that it is a command) will be processed as part of the conversation.""")
+    help_strings.append("""Any text without a slash '/' (indicating that it is a command) will be processed as part of the conversation.""")
     console.print_columns(help_strings)
     console.print('')
 
@@ -584,7 +585,7 @@ if __name__ == '__main__':
     
     if MICROPHONE:
         import microphone
-        microphone_thread = threading.Thread(target=microphone.watch_record_audio, daemon=True)
+        microphone_thread = threading.Thread(target=microphone.watch_record_audio, kwargs={'conversation': chat}, daemon=True)
         microphone_thread.start()
     
     last_input_reset = False
@@ -594,9 +595,10 @@ if __name__ == '__main__':
             user_input = chat.input(prefix=(not last_input_reset))
             last_input_reset = False
             if not user_input:
-                if MICROPHONE and microphone.TEXT:
-                    user_input = microphone.TEXT
-                    microphone.TEXT = ''
+                if MICROPHONE and microphone.transcribed_text:
+                    user_input = microphone.transcribed_text
+                    microphone.transcribed_text = ''
+                    console.print_rule()
                 else:
                     screen_reset(chat)
                     last_input_reset = True
@@ -614,7 +616,7 @@ if __name__ == '__main__':
                         ret = commands[command](chat, *args)
                         if ret:
                             user_input = ret
-                        if command not in ('history', 'restart'):
+                        if command not in ('history', 'restart', 'load'):
                             console.print_rule()
                     elif command in ALL_BOTS: # New bot chat by name (!help, !code, !math, etc...)
                         FIRST_MESSAGE = False # Just loaded, don't switch context right away
@@ -624,7 +626,7 @@ if __name__ == '__main__':
             else:
                 console.print_rule()
             # Some commands change user_input. Check again if we need to do dialogue
-            if user_input and not user_input.startswith('!'):
+            if user_input and not user_input[0] in {'!', '/'}:
                 if SWITCH and FIRST_MESSAGE:
                     with console.status('Checking context...'):
                         switch = switch_context(user_input)
@@ -641,3 +643,4 @@ if __name__ == '__main__':
     except Exception as e:
         console.print_exception(e, show_locals=True)
         console.print('Fatal error. Please restart. Your data might be saved 🤞')
+        sys.exit(1) # Exit with an error

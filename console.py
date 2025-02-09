@@ -36,13 +36,20 @@ resets = 0
 def rgb(hex_string):
     return [int(hex_string[i:i+2], 16) for i in (1, 3, 5)]
 
+def hex(r, g, b):
+    return f'#{r:02x}{g:02x}{b:02x}'
+
 def bright(hex_string):
     return sum(rgb(hex_string)) > 384
+
+def blend(c0, c1, f):
+    ret = (int((1-f)*a + f*b) for a, b in zip(rgb(c0), rgb(c1)))
+    return hex(*ret)
 
 STYLES = list(get_all_styles())
 code_theme = 'one-dark'
 code_style = None
-terminal_background = '#0C0C0C' # ps:#0C0C0C od:#181818 lb:#101420
+terminal_background = '#0C0C0C' # ps:#0C0C0C od:#181818 lb:#101420 tl: #F0F0F0
 
 def set_theme(theme, background=None):
     global code_theme, code_style, terminal_background
@@ -269,15 +276,17 @@ def print_rule(string=None, style='bright_black'):
     else:
         std_print(f'==== {string} ====')
 
-def print_filename(filename):
+def print_filename(filename, model=''):
     folder, file = filename.split('/')
     match file.capitalize().split('_'):
         case [f, d, n]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}[/] [od.dim]-[/] [od.white]{d}[/] [od.dim]-[/] [bold]{n}'
+            s = f'[bold]{f.capitalize()}Bot[/] [od.dim]-[/] [od.white]{d}[/] [od.dim]-[/] [bold]{n}'
         case [f, n]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}[/] [od.dim]-[/] [bold]{n}'
+            s = f'[bold]{f.capitalize()}Bot[/] [od.dim]-[/] [bold]{n}'
         case [f]:
-            s = f'[od.dim]{folder} /[/] [bold]{f}'
+            s = f'[bold]{f.capitalize()}Bot'
+    if model:
+        s = f'[od.white]{model}[/] [od.dim]-[/] ' + s
     print_rule(s)
 
 def print_function(call):

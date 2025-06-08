@@ -82,9 +82,9 @@ MODEL_LIST = [ # cost: dollars per million tokens
     # https://www.anthropic.com/pricing#anthropic-api
     Model(id='claude-3-opus-latest', label='Claude 3', costs=(15.0, 75.0),
         context=200000, llm='anthropic', shortcuts=('opus3',), tools=True),
-    Model(id='claude-4-opus-latest', label='Claude 4 Opus', costs=(15.0, 75.0),
+    Model(id='claude-opus-4-0', label='Claude 4 Opus', costs=(15.0, 75.0),
         context=200000, llm='anthropic', shortcuts=('opus',), tools=True, vision=True),
-    Model(id='claude-4-sonnet-latest', label='Claude 4 Sonnet', costs=(3.0, 15.0),
+    Model(id='claude-sonnet-4-0', label='Claude 4', costs=(3.0, 15.0),
         context=200000, llm='anthropic', shortcuts=('c', 'claude'), tools=True, vision=True),
     Model(id='claude-3-5-sonnet-latest', label='Claude 3.5', costs=(3.0, 15.0),
         context=200000, llm='anthropic', shortcuts=('s', 'sonnet', 'c35s'), tools=True, vision=True),

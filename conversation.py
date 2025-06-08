@@ -81,9 +81,13 @@ MODEL_LIST = [ # cost: dollars per million tokens
         context=1048576, llm='gemini', shortcuts=('g', 'gemini', 'f', 'flash'), tools=False, vision=False),
     # https://www.anthropic.com/pricing#anthropic-api
     Model(id='claude-3-opus-latest', label='Claude 3', costs=(15.0, 75.0),
-        context=200000, llm='anthropic', shortcuts=('opus',), tools=True),
+        context=200000, llm='anthropic', shortcuts=('opus3',), tools=True),
+    Model(id='claude-4-opus-latest', label='Claude 4 Opus', costs=(15.0, 75.0),
+        context=200000, llm='anthropic', shortcuts=('opus',), tools=True, vision=True),
+    Model(id='claude-4-sonnet-latest', label='Claude 4 Sonnet', costs=(3.0, 15.0),
+        context=200000, llm='anthropic', shortcuts=('c', 'claude'), tools=True, vision=True),
     Model(id='claude-3-5-sonnet-latest', label='Claude 3.5', costs=(3.0, 15.0),
-        context=200000, llm='anthropic', shortcuts=('c', 'claude', 's', 'sonnet'), tools=True, vision=True),
+        context=200000, llm='anthropic', shortcuts=('s', 'sonnet', 'c35s'), tools=True, vision=True),
     Model(id='claude-3-5-haiku-latest', label='Claude 3.5 Haiku', costs=(0.8, 4.0),
         context=200000, llm='anthropic', shortcuts=('h', 'haiku')),
     # https://ollama.com/library
